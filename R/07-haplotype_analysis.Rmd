@@ -1,0 +1,211 @@
+---
+title: "Haplotype analysis"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(adegenet)
+library(pegas)
+library(hierfstat)
+library(vcfR)
+library(ape)
+library(poppr)
+library(fuzzyjoin)
+library(rehh)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+# Summary
+
+Haplotype analysis for detecting selection/selective sweeps
+
+# Haplotype selection tests
+
+```{r}
+hh_tbl <- 1:19 %>%
+  map(function(chr) {
+    fs::dir_ls(here::here("data", "derived", "beagle"), glob = "*_phased.vcf.gz") %>%
+       map(function(vcffile) {
+    
+        pop <- str_extract(vcffile, "(?<=\\/)\\w+(?=_phased)")
+    
+        hh <- data2haplohh(hap_file = vcffile,
+                       polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+        res <- scan_hh(hh, polarized = FALSE, discard_integration_at_border = FALSE) %>%
+          mutate(site = pop, chrom = chr)
+    
+        return(res)
+      }) %>%
+      bind_rows()
+  }) %>%
+  bind_rows() %>%
+  as_tibble() %>%
+  janitor::clean_names()
+
+write_rds(hh_tbl, here::here("data", "derived", "hap_selection_tbl.rds"))
+```
+
+
+```{r}
+hh_tbl %>%
+  count(site)
+
+ggplot(hh_tbl, aes(x = position, y = ies, color = site)) +
+  geom_line() +
+  facet_wrap(~chrom)
+
+```
+
+Now try to calculate Rsb and XP-EHH for Spain vs Scotland
+
+```{r}
+
+rsb_esp_scot <- 1:19 %>%
+  map(function(chr) {
+
+
+    hh1 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "ESP_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res1 <- scan_hh(hh1, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    hh2 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "NE_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res2 <- scan_hh(hh2, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    ines2rsb(res1, res2, "ESP", "SCOT") %>%
+      as_tibble()
+    
+    }) %>%
+  bind_rows() %>%
+  janitor::clean_names() %>%
+  rename(rsb = rsb_esp_scot) %>%
+  mutate(comp = "esp_scot")
+
+
+ggplot(rsb_esp_scot, aes(x = POSITION, y = RSB_ESP_SCOT)) +
+  geom_line() +
+  facet_wrap(~CHR)
+
+
+xpehh_esp_scot <- 1:19 %>%
+  map(function(chr) {
+
+
+    hh1 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "ESP_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res1 <- scan_hh(hh1, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    hh2 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "NE_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res2 <- scan_hh(hh2, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    ies2xpehh(res1, res2, "ESP", "SCOT") %>%
+      as_tibble()
+    
+    }) %>%
+  bind_rows() %>%
+  janitor::clean_names() %>%
+  rename(xpehh = xpehh_esp_scot) %>%
+  mutate(comp = "esp_scot")
+
+
+ggplot(xpehh_esp_scot, aes(x = position, y = xpehh)) +
+  geom_line() +
+  facet_wrap(~chr)
+
+ggplot(xpehh_esp_scot, aes(x = position, y = logpvalue)) +
+  geom_line() +
+  facet_wrap(~chr)
+
+```
+
+Now Rsb for Norway vs Scotland:
+
+```{r}
+rsb_nor_scot <- 1:19 %>%
+  map(function(chr) {
+
+
+    hh1 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "SNO_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res1 <- scan_hh(hh1, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    hh2 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "NE_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res2 <- scan_hh(hh2, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    ines2rsb(res1, res2, "NOR", "SCOT") %>%
+      as_tibble()
+    
+    }) %>%
+  bind_rows() %>%
+  janitor::clean_names() %>%
+  rename(rsb = rsb_nor_scot) %>%
+  mutate(comp = "nor_scot")
+
+```
+
+Now Spain vs Norway:
+
+```{r}
+rsb_esp_nor <- 1:19 %>%
+  map(function(chr) {
+
+
+    hh1 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "ESP_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res1 <- scan_hh(hh1, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    hh2 <- data2haplohh(hap_file = here::here("data", "derived", "beagle", "SNO_phased.vcf.gz"),
+                           polarize_vcf = FALSE, chr.name = glue::glue("HiC_scaffold_{chr}_arrow_ctg1"))
+    
+    res2 <- scan_hh(hh2, polarized = FALSE, discard_integration_at_border = FALSE)
+    
+    ines2rsb(res1, res2, "ESP", "NOR") %>%
+      as_tibble()
+    
+    }) %>%
+  bind_rows() %>%
+  janitor::clean_names() %>%
+  rename(rsb = rsb_esp_nor) %>%
+  mutate(comp = "esp_nor")
+```
+
+Combine the data frames:
+
+```{r}
+rsb_tbl <- bind_rows(rsb_esp_nor, rsb_esp_scot, rsb_nor_scot) %>%
+  extract(chr, "chrom_num", "HiC_scaffold_(\\d+)_arrow_ctg1", remove = FALSE) %>%
+  mutate(chr = as.character(chr), chrom_num = as.integer(chrom_num), position = as.integer(position)) %>%
+  rename(chrom = chr, pos = position) %>%
+  mutate(locus = paste(chrom, pos, sep = "_")) %>%
+  select(locus, everything())
+
+write_rds(rsb_tbl, here::here("data", "derived", "rsb_tbl.rds"))
+```
+
+
+
+# References
+

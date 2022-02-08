@@ -1,0 +1,52 @@
+---
+title: "Prune SNPs"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(bigsnpr)
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+This identifies a "quasi-independent" set of SNPs for neutral parameterization of selection outlier tests:
+
+```{r}
+# Create binary plink files
+system("plink2 --vcf data/derived/out.17.phased.vcf --make-bed --out data/derived/out.17 --allow-extra-chr")
+
+# Get the created filename
+bedfile <- here::here("data", "derived", "out.17.bed")
+
+# Read the bedfile and store the data in temp dir
+rds <- snp_readBed(bedfile, backingfile = tempfile())
+
+# Load the data from the backing file
+dat <- snp_attach(rds)
+G <- dat$genotypes
+
+#big_counts(dat$genotypes, ind.col = 1:10)
+
+chrom_vec <- tibble(chr = dat$map$chromosome) %>%
+  extract(chr, "chrom", "HiC_scaffold_(\\d+)_") %>%
+  mutate(chrom = as.integer(chrom)) %>%
+  pull(chrom)
+
+
+# Run the SVD
+thinned_snps <- snp_autoSVD(dat$genotypes, infos.chr = chrom_vec, infos.pos = dat$map$physical.pos, roll.size = 5, int.min.size = 10)
+
+#thin_set <- attr(thinned_snps, "subset")
+
+# Write the thinned SNP set to a file
+write_rds(thinned_snps, here::here("data", "derived", "pruned_snps.rds"))
+```
+
+

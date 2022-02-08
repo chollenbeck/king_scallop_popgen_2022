@@ -1,0 +1,209 @@
+---
+title: "Selection outlier detection"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography: ../man/scalpop.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(adegenet)
+library(vcfR)
+library(bigsnpr)
+library(hierfstat)
+library(qvalue)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+# Run Bayescan
+
+First import the unphased SNP data:
+
+```{r}
+# Source the custom write_bscan() function
+source(here::here("bin", "write_bayescan.R"))
+
+# Read in the filtered SNP VCF file (non-phased) to a genind object
+gen <- read.vcfR(here::here("data", "raw", "out.17.recode.vcf"), verbose = FALSE) %>%
+  vcfR2genind()
+
+# Assign populations to the genind
+popnames <- tibble(id = indNames(gen)) %>%
+  extract(id, "pop", "(\\w+)_", remove = FALSE) %>%
+  pull(pop)
+
+pop(gen) <- popnames
+```
+
+Now set up Bayescan:
+
+```{r}
+bscan_input_path <- here::here("data", "derived", "snp_bayescan_17.txt")
+write_bscan(genind = gen, file = bscan_input_path)
+
+# Run BayeScan for both files
+bayescan_bin <- here::here("bin", "BayeScan2.1_linux64bits")
+bayescan_out <- here::here("data", "derived")
+
+
+# Run bayescan: This is commented out because it takes a long time to run
+#snp_job <- parallel::mcparallel(system(glue::glue("{bayescan_bin} {bscan_input_path} -od {bayescan_out} -threads 5 -pr_odds 100 -o pmax")),
+#                                silent = TRUE)
+
+# Read in the Bayescan output for the snps
+bay_tbl <- read_table2(here::here("data", "raw", "pmax_17_fst.txt"),
+                       skip = 1,
+                       col_names = c("index", "prob", "log10_po", "bay_qval", "bay_alpha", "fst", "extra"),
+                       col_types = cols(
+                                        index = col_double(),
+                                        prob = col_double(),
+                                        log10_po = col_double(),
+                                        bay_qval = col_double(),
+                                        bay_alpha = col_double(),
+                                        fst = col_double(),
+                                        extra = col_logical()
+                        )) %>%
+  select(-extra) %>%
+  mutate(locus = locNames(gen)) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(bay_outlier = bay_qval < 0.05,
+         bay_directional = bay_qval < 0.05 & bay_alpha > 0,
+         bay_balancing = bay_qval < 0.05 & bay_alpha < 0,
+         pos = as.integer(pos),
+         chrom = as.integer(chrom))
+
+bay_tbl %>%
+  count(bay_outlier)
+```
+
+# Run pcadapt
+
+```{r}
+# Read in the bedfile and the set of pruned SNPs
+bedfile <- here::here("data", "derived", "out.17.bed")
+thin_set <- read_rds(here::here("data", "derived", "pruned_snps.rds"))
+
+# Read the bedfile and store the data in temp dir
+rds <- snp_readBed(bedfile, backingfile = tempfile())
+
+# Load the data from the backing file
+dat <- snp_attach(rds)
+G <- dat$genotypes
+```
+
+This runs pcadapt using the best practices outlined in @lotterhos_effect_2019:
+
+```{r}
+pcad_res <- snp_pcadapt(G, U.row = thin_set$u[,1:10])
+#str(pcad_res)
+
+gc <- snp_gc(pcad_res)
+pvalues <- predict(gc, log10 = FALSE)
+
+pcadapt_out_tbl <- dat$map %>%
+  extract(chromosome, "chrom", "HiC_scaffold_(\\d+)_") %>%
+  mutate(chrom = as.integer(chrom)) %>%
+  mutate(pca_log_10_pval = -log10(pvalues)) %>%
+  mutate(pca_qval = qvalue(pvalues)$qvalues) %>%
+  mutate(pca_outlier = if_else(pca_qval < 0.05, TRUE, FALSE))
+
+```
+
+# Combine and visualize results
+
+```{r}
+out_tbl <- bay_tbl %>%
+  left_join(pcadapt_out_tbl, by = c("chrom", "pos" = "physical.pos")) %>%
+  select(locus, chrom, pos, bay_prob = prob, bay_qval, bay_alpha, bay_fst = fst, bay_outlier, bay_directional, bay_balancing, allele1, allele2, pca_log_10_pval, pca_qval, pca_outlier) %>%
+  mutate(bay_pca_outlier = if_else(bay_outlier == TRUE & pca_outlier == TRUE, TRUE, FALSE),
+         any_outlier = if_else(bay_outlier == TRUE | pca_outlier == TRUE, TRUE, FALSE))
+
+out_tbl
+
+write_rds(out_tbl, here::here("data", "derived", "genome_scan_results.rds"))
+#out_tbl <- read_rds(here::here("data", "derived", "genome_scan_results.rds"))
+
+```
+
+A summary table of the results:
+
+```{r}
+out_tbl %>%
+  count(bay_outlier, pca_outlier) %>%
+  knitr::kable()
+```
+
+Calculate basic stats for visualizing results:
+
+```{r}
+# Calculate basic stats for each population
+gen_stats <- gen %>%
+  genind2hierfstat() %>%
+  basic.stats() %>%
+  .$perloc %>%
+  rownames_to_column("locus") %>%
+  as_tibble() %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+  select(locus, chrom, pos, ho = Ho, he = Hs, global_fst = Fst)
+
+
+# Add this to the outlier tibble
+comb_tbl <- out_tbl %>%
+  left_join(gen_stats, by = c("locus", "chrom", "pos"))
+  
+```
+
+## Pcadapt outliers
+
+```{r}
+ggplot(comb_tbl, aes(x = pos, y = global_fst, color = pca_outlier)) +
+  geom_point() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3])) +
+  facet_wrap(~chrom) +
+  theme_minimal()
+
+```
+
+
+## Bayescan outliers
+
+```{r}
+ggplot(comb_tbl, aes(x = pos, y = global_fst, color = bay_outlier)) +
+  geom_point() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3])) +
+  facet_wrap(~chrom) +
+  theme_minimal()
+
+```
+
+## In both sets combined
+
+```{r}
+ggplot(comb_tbl, aes(x = pos, y = global_fst, color = any_outlier)) +
+  geom_point() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3])) +
+  facet_wrap(~chrom) +
+  theme_minimal()
+```
+
+## Fst vs Heterozygosity
+
+```{r}
+ggplot(comb_tbl, aes(x = ho, y = global_fst, color = any_outlier)) +
+  geom_point() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3])) +
+  theme_minimal()
+```
+
+

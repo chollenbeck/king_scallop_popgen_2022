@@ -1,0 +1,366 @@
+---
+title: "Outlier Summary"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography:
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(eulerr)
+library(vcfR)
+library(adegenet)
+library(hierfstat)
+library(poppr)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+# Summary
+
+A summary of the results from the genome scan and environmental association tests
+
+# Combine results
+
+```{r}
+gs_tbl <- read_rds(here::here("data", "derived", "genome_scan_results.rds"))
+env_tbl <- read_rds(here::here("data", "derived", "env_assoc_tbl.rds"))
+
+# Join the tibbles
+comb_tbl <- gs_tbl %>%
+  left_join(env_tbl, by = c("locus", "chrom", "pos"))
+
+```
+
+# Summarize the outliers
+
+First calculate some basic population stats:
+
+```{r}
+gen <- read.vcfR(here::here("data", "raw", "out.17.recode.vcf")) %>%
+  vcfR2genind()
+
+pops <- tibble(ind = indNames(gen)) %>%
+  extract(ind, "pop", "(\\w+)_", remove = FALSE) %>%
+  pull(pop)
+
+pop(gen) <- pops
+
+# Calculate basic stats for each population
+pop_stats <- gen %>%
+  genind2hierfstat() %>%
+  basic.stats()
+
+global_stats <- pop_stats$perloc %>%
+  rownames_to_column(var = "locus") %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  as_tibble() %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+  select(locus, chrom, pos, Ho, Hs, Fst, Fis)
+
+comb_tbl <- comb_tbl %>%
+  left_join(global_stats, by = c("locus", "chrom", "pos")) %>%
+  mutate(outlier = if_else(bay_outlier == TRUE | pca_outlier == TRUE | lfmm_env_assoc == TRUE | rda_env_assoc == TRUE, TRUE, FALSE))
+
+write_rds(comb_tbl, here::here("data", "derived", "outlier_summary.rds"))
+
+```
+
+How many outliers identified by all methods?
+
+```{r}
+comb_tbl %>%
+  filter(bay_outlier == TRUE, pca_outlier == TRUE, lfmm_env_assoc == TRUE, rda_env_assoc == TRUE)
+```
+
+How many outliers identified by any method?
+
+```{r}
+comb_tbl %>%
+  filter(outlier == TRUE)
+```
+
+How many loci were associated with temperature:
+
+```{r}
+comb_tbl %>%
+  filter(any_env_outlier)
+  
+```
+
+
+Summarize the results of the various methods:
+
+```{r}
+bay_outs <- comb_tbl %>%
+  filter(bay_outlier == TRUE) %>%
+  pull(locus)
+
+pca_outs <- comb_tbl %>%
+  filter(pca_outlier == TRUE) %>%
+  pull(locus)
+
+lfmm_outs <- comb_tbl %>%
+  filter(lfmm_env_assoc == TRUE) %>%
+  pull(locus)
+
+rda_outs <- comb_tbl %>%
+  filter(rda_env_assoc == TRUE) %>%
+  pull(locus)
+
+venn_lst <- list(bayescan = bay_outs, pcadapt = pca_outs, lfmm = lfmm_outs, rda = rda_outs)
+```
+
+Venn diagram:
+
+```{r}
+
+plot(venn(venn_lst))
+
+```
+
+Proportional euler diagram:
+
+```{r}
+plot(euler(venn_lst, shape = "ellipse"), quantities = TRUE)
+```
+
+Show the genomic location of the outliers:
+
+Fst by genomic position:
+
+```{r}
+comb_tbl %>%
+  mutate(pos_mb = pos / 1000000) %>%
+  ggplot(aes(x = pos_mb, y = Fst, col = outlier, shape = any_env_outlier)) +
+  geom_point() +
+  facet_wrap(~chrom, ncol = 2) +
+  theme_minimal() +
+  scale_color_manual(name = "Selection Outlier", values = c(cmh_palette[5], cmh_palette[1]),
+                     breaks = c(TRUE, FALSE)) +
+  scale_shape_discrete(name = "Temperature Associated", breaks = c(TRUE, FALSE)) +
+  labs(x = "Position (Mb)",
+       y = expression(F[ST]))
+
+ggplot(comb_tbl, aes(x = pos, y = Fst, col = any_env_outlier)) +
+  geom_point() +
+  facet_wrap(~chrom, ncol = 2) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[5]))
+```
+
+# Allele freq heatmap
+
+```{r}
+
+chrom_num <- "8"
+
+all_freqs <- gen %>%
+  pantomime::get_allele_freqs() %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(pos = as.integer(pos)) %>%
+  filter(chrom == chrom_num)
+
+
+# Get the alleles where Spain is highest freq
+high_allele_tbl <- all_freqs %>%
+  group_by(locus) %>%
+  filter(pop == "ESP") %>%
+  filter(freq <= 0.5) %>%
+  filter(row_number() == 1) %>%
+  select(locus, chrom, pos, allele) %>%
+  filter(chrom == chrom_num) %>%
+  ungroup()
+
+pos_order <- all_freqs %>%
+  filter(pop == "ESP") %>%
+  filter(allele == "0") %>%
+  arrange(pos) %>%
+  mutate(pos = as.character(pos)) %>%
+  pull(pos)
+
+freq_tbl <- all_freqs %>%
+  semi_join(high_allele_tbl, by = c("chrom", "pos", "allele")) %>%
+  mutate(pos = as.character(pos)) %>%
+  mutate(pos = factor(pos, levels = pos_order)) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO")))
+
+ggplot(freq_tbl, aes(x = pos, y = pop, fill = freq)) +
+  geom_tile() +
+  viridis::scale_fill_viridis(limits = c(0, 1))
+  
+
+
+```
+
+
+# Look at regional comparisons
+
+```{r}
+
+tmp_tbl <- comb_tbl %>%
+  select(locus, chrom, pos, outlier)
+
+# Recode the populations regionally
+pop_tbl <- tibble(pop = pop(gen)) %>%
+  mutate(region = case_when(pop == "ESP" ~ "ESP",
+                            pop %in% c("SNO", "NNO") ~ "NOR",
+                            TRUE ~ "SCOT"))
+
+gen_reg <- gen
+pop(gen_reg) <- pop_tbl$region
+
+scot_nor <- gen_reg[pop = c("SCOT", "NOR")]
+scot_esp <- gen_reg[pop = c("SCOT", "ESP")]
+esp_nor <- gen_reg[pop = c("ESP", "NOR")]
+
+scot_nor_pw <- basic.stats(scot_nor) %>%
+  .$perloc %>%
+  rownames_to_column(var = "locus") %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  as_tibble() %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+  select(locus, chrom, pos, Ho, Hs, Fst, Fis) %>%
+  left_join(tmp_tbl, by = c("locus", "chrom", "pos")) %>%
+  mutate(comp = "scot_nor")
+
+scot_esp_pw <- basic.stats(scot_esp) %>%
+  .$perloc %>%
+  rownames_to_column(var = "locus") %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  as_tibble() %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+  select(locus, chrom, pos, Ho, Hs, Fst, Fis) %>%
+  left_join(tmp_tbl, by = c("locus", "chrom", "pos")) %>%
+  mutate(comp = "scot_esp")
+
+esp_nor_pw <- basic.stats(esp_nor) %>%
+  .$perloc %>%
+  rownames_to_column(var = "locus") %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  as_tibble() %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+  select(locus, chrom, pos, Ho, Hs, Fst, Fis) %>%
+  left_join(tmp_tbl, by = c("locus", "chrom", "pos")) %>%
+  mutate(comp = "esp_nor")
+
+write_rds(scot_nor_pw, here::here("data", "derived", "scot_nor_pw_fst.rds"))
+write_rds(scot_esp_pw, here::here("data", "derived", "scot_esp_pw_fst.rds"))
+write_rds(esp_nor_pw, here::here("data", "derived", "esp_nor_pw_fst.rds"))
+
+```
+
+Look at Scotland/Spain Fst:
+
+```{r}
+ggplot(scot_esp_pw, aes(x = pos, y = Fst, col = outlier)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+
+ggplot(scot_esp_pw, aes(x = pos, y = Fst, col = outlier)) +
+  geom_point() +
+  facet_wrap(~chrom, ncol = 1) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+
+```
+
+Now Spain/Norway:
+
+```{r}
+ggplot(esp_nor_pw, aes(x = pos, y = Fst, col = outlier)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+```
+
+Now Scotland/Norway:
+
+```{r}
+ggplot(scot_nor_pw, aes(x = pos, y = Fst, col = outlier)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+```
+
+# Plot regional Fst for selected chromosomes
+
+```{r}
+
+all_reg_tbl <- bind_rows(scot_nor_pw, scot_esp_pw, esp_nor_pw) %>%
+  filter(Fst > -0.05) %>%
+  mutate(position_mb = pos / 1000000)
+
+rects <- tibble(chrom = c(2, 2, 3, 8, 10, 10, 12, 13),
+                xstart = c(0.8E7, 4E7, 3.2E7, 0, 1.5E7, 2.6E7, 0, 1.4E7),
+                xend = c(1.2E7, 5.5E7, 3.8E7, 2.5E7, 1.8E7, 3.0E7, 1.5E7, 2E7),
+                color = c("#247ba0", "#247ba0", "#69af6d", "#247ba0", "#69af6d", "#247ba0", "#247ba0","#69af6d" ))
+
+chr_labs <- c("Chr 2", "Chr 3", "Chr 8", "Chr 10", "Chr 12", "Chr 13")
+names(chr_labs) <- c(2, 3, 8, 10, 12, 13)
+
+comp_labs <- c("Spain:Norway", "Spain:Scotland", "Scotland:Norway")
+names(comp_labs) <- c("esp_nor", "scot_esp", "scot_nor")
+
+all_reg_tbl %>%
+  filter(chrom %in% c(2, 3, 8, 10, 12, 13)) %>%
+  ggplot(aes(x = position_mb, y = Fst, col = outlier)) +
+  geom_point() +
+  scale_y_continuous(breaks=c(0, 0.5, 1)) +
+  facet_grid(comp~chrom, labeller = labeller(chrom = chr_labs, comp = comp_labs)) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]), labels = c("Neutral", "Outlier")) +
+  geom_rect(data = rects, aes(x = NULL, y = NULL, xmin = xstart / 1000000, xmax = xend / 1000000, ymin = 0, ymax = 1), inherit.aes = FALSE, alpha = 0.3, fill = rep(rects$color, 3)) +
+  labs(x = "Position (Mb)",
+       y = expression(F[ST])) +
+  theme(strip.text.y = element_text(angle = 0, face = "bold"),
+        strip.text.x = element_text(face = "bold"),
+        legend.position = "left",
+        legend.title = element_blank())
+
+```
+
+
+# Create neutral and outlier genind objects
+
+Create neutral dataset:
+
+```{r}
+neut_loci <- comb_tbl %>%
+  filter(outlier == FALSE) %>%
+  pull(locus)
+
+neut_gen <- gen[loc = neut_loci]
+
+write_rds(neut_gen, here::here("data", "derived", "neutral_genind.rds"))
+
+```
+
+Create outlier dataset:
+
+```{r}
+out_loci <- comb_tbl %>%
+  filter(outlier == TRUE) %>%
+  pull(locus)
+
+out_gen <- gen[loc = out_loci]
+
+write_rds(out_gen, here::here("data", "derived", "outlier_genind.rds"))
+```
+
+
+# References
+

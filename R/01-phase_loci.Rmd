@@ -1,0 +1,134 @@
+---
+title: "Phasing loci"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography:
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(vcfR)
+library(adegenet)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+beagle_exe <- "/usr/local/bin/beagle.18May20.d20.jar"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+Import the raw VCF and set up BEAGLE to phase chromosomes:
+
+```{r}
+# Read in the VCF file
+vcf_raw <- read.vcfR(here::here("data", "raw", "out.17.recode.vcf"), verbose = FALSE)
+
+# Tidy the VCF
+vcf_tidy <- vcf_raw %>%
+  vcfR2tidy(verbose = FALSE)
+
+# Read in the genlight
+gl <- vcf_raw %>%
+  vcfR2genlight()
+
+# Keep only loci mapped to chromosomes:
+loc_tbl <- tibble(locus = gl@loc.names) %>%
+  extract(locus, "chrom", "scaffold_(\\d+)_arrow_ctg1", remove = FALSE) %>%
+  extract(locus, "pos", "scaffold_\\d+_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom = as.integer(chrom),
+         pos = as.integer(pos))
+
+chrom_loci <- loc_tbl %>%
+  filter(chrom < 20) %>%
+  pull(locus)
+
+chroms <- loc_tbl %>%
+  filter(chrom < 20) %>%
+  extract(locus, "chrom_name", "(HiC_scaffold_\\d+_arrow_ctg1)") %>%
+  pull(chrom_name) %>%
+  unique()
+
+# Create the genotype matrix
+gl_mat <- gl %>%
+  as.matrix()
+
+gl_chrom <- gl[,chrom_loci]
+
+# Produce the SNP data frame
+snp_tbl <- loc_tbl %>%
+  filter(locus %in% chrom_loci) %>%
+  select(chr = chrom, pos, locus) %>%
+  as.data.frame() %>%
+  `rownames<-`(.$locus) %>%
+  select(-locus)
+
+# Produce the allele data frame
+allele_tbl <- vcf_tidy$fix %>%
+  mutate(locus = paste(CHROM, POS, sep = "_")) %>%
+  select(locus, REF, ALT) %>%
+  filter(locus %in% chrom_loci) %>%
+  as.data.frame() %>%
+  `rownames<-`(.$locus) %>%
+  select(-locus)
+
+# Run BEAGLE to phase the loci
+
+ids <- vcfR2genind(vcf_raw) %>%
+  indNames()
+
+pop_tbl <- tibble(id = ids) %>%
+  extract(id, "pop", "(\\w+)_", remove = FALSE)
+
+pops <- unique(pop_tbl$pop)
+
+
+beagle_dir <- here::here("data", "derived", "beagle")
+if (!dir.exists(beagle_dir)) {
+  dir.create(beagle_dir)
+}
+
+for(i in seq_along(pops)) {
+    
+    pop_inds <- filter(pop_tbl, pop == pops[i]) %>%
+      pull(id)
+    
+    # Find the index of the correct rows (loci)
+    row_vec <- which(vcf_raw@fix[,1] %in% chroms)
+    
+    pop_idx <- which(colnames(vcf_raw@gt) %in% pop_inds)
+    col_vec <- c(1, pop_idx)
+    
+    # Subset the vcf
+    sub_vcf <- vcf_raw[row_vec, col_vec]
+    
+    # Format the VCF for compatibility with BEAGLE
+    sub_vcf@gt[] <- sapply(sub_vcf@gt, gsub, pattern = "\\|", replacement = "\\/", simplify = "array")
+    sub_vcf@gt[] <- sapply(sub_vcf@gt, gsub, pattern = "^\\.:", replacement = "\\.\\/\\.:", simplify = "array")
+    
+    write.vcf(sub_vcf, file = here::here("data", "derived", "beagle", glue::glue("vcf_{pops[i]}.vcf.gz")))
+    
+    infile <- here::here("data", "derived", "beagle", glue::glue("vcf_{pops[i]}.vcf.gz"))
+    outfile <- here::here("data", "derived", "beagle", glue::glue("{pops[i]}_phased"))
+    
+    system(glue::glue("java -Xmx2g -jar {beagle_exe} gt={infile} out={outfile}"))
+    systemc(glue::glue("bcftools index {outfile}.vcf.gz"))
+    
+}
+```
+
+Merge all of the phased VCF files together:
+```{r}
+systemc(glue::glue("bcftools merge data/derived/beagle/*_phased.vcf.gz > data/derived/out.17.phased.vcf"))
+
+```
+
+
+
+

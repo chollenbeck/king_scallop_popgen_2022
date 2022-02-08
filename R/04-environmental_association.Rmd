@@ -1,0 +1,331 @@
+---
+title: "Environmental association tests"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(LEA)
+library(qvalue)
+library(vcfR)
+library(adegenet)
+library(vegan)
+library(viridis)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+options(ggplot2.discrete.colour="viridis")
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cmh_palette)
+}
+
+```
+
+# Import data
+
+Import the genotype data:
+
+```{r}
+# Read in the genlight and convert
+gl <- read.vcfR(here::here("data", "derived", "out.17.phased.vcf"), verbose = FALSE) %>%
+  vcfR2genlight()
+
+gl_mat <- gl %>%
+  as.matrix()
+```
+
+Import the sea surface temperature data:
+
+```{r}
+temp_tbl <- read_tsv(here::here("data", "raw", "mean_temps.tsv")) %>%
+  mutate(temp_scaled = temp - mean(temp),
+         rand_temps = runif(8, -1, 1))
+  
+
+ind_temps <- tibble(id = indNames(gl)) %>%
+  extract(id, "pop", "(\\w+)_", remove = FALSE) %>%
+  left_join(temp_tbl, by = c("pop" = "site"))
+```
+
+
+# Run LEA/LFMM
+
+Reference: http://membres-timc.imag.fr/Olivier.Francois/LEA/files/LEA_github.pdf
+
+First, convert the genotype data:
+
+```{r cache=TRUE}
+LEA::write.lfmm(gl_mat, output.file = here::here("data", "derived", "pmax.lfmm"))
+
+gt <- lfmm2geno(here::here("data", "derived", "pmax.lfmm"))
+```
+
+Now estimate individual admixture components using snmf()
+
+```{r cache=TRUE}
+snmf_obj <- snmf(gt, K = 1:12, entropy = T, ploidy = 2, project="new")
+
+plot(snmf_obj)
+
+barplot(t(Q(snmf_obj, K = 3)), col = 1:6)
+```
+
+Now run LFMM, assuming K = 3:
+
+```{r cache=TRUE}
+write_lines(ind_temps$temp_scaled, file = here::here("data", "derived", "temps.env"))
+
+lfmm_dat <- LEA::read.lfmm(here::here("data", "derived", "pmax.lfmm"))
+
+obj_lfmm = lfmm(here::here("data", "derived", "pmax.lfmm"), here::here("data", "derived", "temps.env"), K = 3, rep = 5, project="new")
+
+# Record z-scores from the 5 runs in the zs matrix
+z_scores <- z.scores(obj_lfmm, K = 3)
+
+# Combine z-scores for each of the runs using the median
+zs_median <- apply(z_scores, MARGIN = 1, median)
+
+# Compute the GIF
+lambda  <- median(zs_median^2) / qchisq(0.5, df = 1)
+lambda
+
+# Compute adjusted p-values from the combined z-scores
+adj_pval <- pchisq(zs_median^2/lambda, df = 1, lower = FALSE)
+
+# Histogram of p-values
+qplot(adj_pval)
+
+## FDR control: Storey's q-values 
+plot(qvalue(adj_pval))
+cands_qv <- which(qvalue(adj_pval, fdr = 0.05)$signif)
+
+lfmm_res <- tibble(locus = locNames(gl)) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+  mutate(loc_num = row_number()) %>%
+  mutate(lfmm_env_assoc = if_else(loc_num %in% cands_qv, TRUE, FALSE))
+
+
+
+```
+
+# Run RDA analysis
+
+Reference: https://popgen.nescent.org/2018-03-27_RDA_GEA.html
+
+```{r}
+
+# First prep the genetic data
+
+# Make sure the ids are in order
+identical(row.names(gl_mat), ind_temps$id)
+
+temp_mat <- matrix(ind_temps$temp_scaled)
+colnames(temp_mat) <- c("temp")
+
+
+#rand_mat <- matrix(rnorm(n = nrow(temp_mat)))
+#colnames(rand_mat) <- c("temp")
+
+rda_res <- rda(gl_mat ~ temp_scaled, data = ind_temps, scale = TRUE)
+
+rda_sig <- anova.cca(rda_res, parallel=getOption("mc.cores"))
+
+RsquareAdj(rda_res)
+
+plot(rda_res)
+
+rda_res$CCA$v
+
+rda_loadings <- scores(rda_res , display="species")
+
+hist(rda_loadings[,1], main="Loadings on RDA1")
+
+rda_load_tbl <- rda_loadings %>%
+  as.data.frame() %>%
+  rownames_to_column("locus") %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom = as.integer(chrom), pos = as.integer(pos))
+
+rda1 <- rda_load_tbl$RDA1
+sig_bounds <- mean(rda1) + c(-1, 1) * 3 * sd(rda1)     # find loadings +/-z sd from mean loading 
+
+rda_res_tbl <- rda_load_tbl %>%
+  mutate(rda_env_assoc = if_else(rda1 < sig_bounds[1] | rda1 > sig_bounds[2], TRUE, FALSE))
+
+
+```
+
+# Correspondence analysis-based RDA
+
+```{r}
+# Import the outlier genind object
+
+out <- read_rds(here::here("data", "derived", "outlier_genind.rds"))
+pca_col <- read_tsv(file = here::here("data", "raw", "colors.tsv"))
+
+# Fix the pop names
+popNames(out) <- popNames(out) %>%
+  str_replace("_\\d+", "")
+
+
+# Run a CA on the genind object
+obj <- genind2genpop(out)
+ca1 <- dudi.coa(tab(obj), scannf=FALSE, nf=10)
+out_ca <- ca1$li[,1:2]
+rownames(out_ca) <- popNames(out)
+
+out_ca <- out_ca %>%
+  rownames_to_column(var = "site") %>%
+  mutate(site = factor(site, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
+  select(site, Axis1, Axis2)
+
+temps <- read_tsv(here::here("data", "derived", "mean_temps.tsv")) %>%
+  left_join(out_ca, by = "site") %>%
+  mutate(group = if_else(site == "SNO" | site == "NNO", "north", "south")) %>%
+  mutate(site = factor(site, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO")))
+
+temps %>%
+  #filter(! site %in% c("SNO", "NNO")) %>%
+  #mutate(site = as.character(site)) %>%
+  ggplot(aes(x = temp, y = Axis1)) +
+  geom_smooth(method = "lm", col = "darkgrey", lty = 1) +
+  geom_point(aes(color = site), size = 4) +
+  scale_color_manual(values = pca_col$col[1:8]) +
+  theme_minimal()
+
+temp_mod <- lm(Axis1 ~ temp + group + lat, data = temps) %>%
+  summary()
+
+
+temps %>%
+  #filter(! site %in% c("SNO", "NNO")) %>%
+  #mutate(site = as.character(site)) %>%
+  ggplot(aes(x = temp, y = Axis1)) +
+  geom_smooth(method = "lm", col = "darkgrey", lty = 1) +
+  geom_point(aes(color = site), size = 4) +
+  scale_color_manual(values = pca_col$col[1:8]) +
+  theme_minimal()
+  
+ca_loadings <- ca1$co %>%
+  as_tibble(rownames = "allele") %>%
+  extract(allele, c("locus", "chrom", "pos", "allele"), "(HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)).(\\d)") %>%
+  mutate(pos = as.integer(pos)) %>%
+  select(locus, chrom, pos, allele, Comp1, Comp2) %>%
+  mutate(Comp1 = Comp1^2, Comp2 = Comp2^2) %>%
+  arrange(desc(Comp1))
+
+top_loadings <- ca_loadings %>%
+  top_n(16, Comp1)
+
+out %>%
+  pantomime::get_allele_freqs()
+
+out %>%
+  pantomime::get_allele_freqs() %>%
+  filter(allele == 0, locus %in% top_loadings$locus) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(pos = as.integer(pos)) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
+  ggplot(aes(x = pop, y = freq, fill = pop)) +
+    geom_col() +
+    scale_fill_manual(values = pca_col$col) +
+    facet_wrap(~locus)
+
+ggplot(ca_loadings, aes(x = pos, y = Comp1)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+
+ggplot(ca_loadings, aes(x = pos, y = Comp2)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+
+
+temps %>%
+  group_by(group) %>%
+  summarise(r2 = cor(temp, Axis1, method = "pearson"))
+
+cor.test(temps$temp[temps$group == "south"], temps$Axis1[temps$group == "south"], method = "pearson")
+
+# Plot the CA
+ggplot(temps, aes(x = Axis1, y = Axis2, colour = site)) +
+  geom_point(size = 8, alpha = 0.8) +
+  scale_colour_manual(values = pca_col$col,
+                      name = "") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14)) +
+  labs(title = "Outlier Correspondence Analysis",
+       x = "Outlier Axis 1",
+       y = "Outlier Axis 2")
+
+# Plot CA Axis 1 and sea surface temperature
+ggplot(temps, aes(x = Axis1, y = temp, group = group)) +
+  geom_point(aes(colour = site), size = 8, alpha = 0.8) +
+  geom_smooth(aes(linetype = group), method = "lm", se = FALSE, colour = "black") +
+  scale_colour_manual(values = pca_col$col,
+                      name = "Site") +
+  scale_linetype_manual(name = "Group",
+                        values = c(1, 2),
+                        labels = c("North", "South")) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14)) +
+  labs(title = "Outliers and Mean Sea Surface Temperature",
+       x = "Outlier Axis 1",
+       y = "Mean Sea Surface Temperature")
+
+```
+
+
+# Combine results
+
+```{r}
+
+env_assoc_tbl <- lfmm_res %>%
+  left_join(rda_res_tbl, by = c("locus", "chrom", "pos")) %>%
+   mutate(hc_env_outlier = if_else(lfmm_env_assoc == TRUE & rda_env_assoc == TRUE, TRUE, FALSE),
+          any_env_outlier = if_else(lfmm_env_assoc == TRUE | rda_env_assoc == TRUE, TRUE, FALSE))
+
+env_assoc_tbl %>%
+  count(lfmm_env_assoc, rda_env_assoc)
+
+write_rds(env_assoc_tbl, here::here("data", "derived", "env_assoc_tbl.rds"))
+```
+
+Plot the results:
+
+Significant results from LFMM:
+
+```{r}
+ggplot(env_assoc_tbl, aes(x = pos, y = abs(RDA1), col = lfmm_env_assoc)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+```
+
+Significant results from the RDA:
+
+```{r}
+ggplot(env_assoc_tbl, aes(x = pos, y = abs(RDA1), col = rda_env_assoc)) +
+  geom_point() +
+  facet_wrap(~chrom) +
+  theme_minimal() +
+  scale_color_manual(values = c(cmh_palette[1], cmh_palette[3]))
+```
+
+
+

@@ -1,0 +1,498 @@
+---
+title: "Population Genetics Analysis"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography:
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(adegenet)
+library(hierfstat)
+library(vcfR)
+library(ggmap)
+library(PBSmapping)
+library(RColorBrewer)
+library(hrbrthemes)
+library(patchwork)
+library(gridExtra)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+# Summary
+
+Evaluating the spatial and genomic distribution of neutral and adaptive genetic variation
+
+# PCA
+
+```{r}
+# Read in the neutral and outlier haplotype data
+out <- read_rds(here::here("data", "derived", "outlier_genind.rds"))
+neut <- read_rds(here::here("data", "derived", "neutral_genind.rds"))
+
+# Fix the pop names
+popNames(neut) <- popNames(neut) %>%
+  str_replace("_\\d+", "")
+
+popNames(out) <- popNames(out) %>%
+   str_replace("_\\d+", "")
+
+##### PCA #####
+
+  
+# Read in the PCA colors
+pca_col <- read_tsv(file = here::here("data", "raw", "colors.tsv"))
+
+# Plot a PCA for the neutral loci
+x_neut <- scaleGen(neut, NA.method = "mean")
+neut_pca <- dudi.pca(x_neut, center = FALSE, scale = FALSE, scannf = FALSE, nf = 4)
+eig_percent_neut <- round((neut_pca$eig / (sum(neut_pca$eig))) * 100, 2)
+
+pca_dat_neut <- as.data.frame(neut_pca$li) %>%
+                    rownames_to_column(var = "ind") %>%
+                    cbind(pop = pop(neut)) %>%
+                    mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
+                    mutate(type = "neut", loc.type = "haps", location = "all")
+
+
+neut_pca <- ggplot(data = pca_dat_neut) +
+    geom_point(aes(x = Axis1, y = Axis2, colour = pop), size = 3, alpha = 0.8) +
+    scale_colour_manual(values = pca_col$col) +
+    theme_minimal() +
+    labs(x = paste("", "Axis 1: ", eig_percent_neut[1], "%"), y = paste("", "Axis 2: ", eig_percent_neut[2], "%")) +
+    coord_fixed(ratio = 1)
+
+# Plot a PCA for the outlier loci
+x_out <- scaleGen(out, NA.method = "mean")
+out_pca <- dudi.pca(x_out, center = FALSE, scale = FALSE, scannf = FALSE, nf = 4)
+
+eig_percent_out <- round((out_pca$eig / (sum(out_pca$eig))) * 100, 2)
+
+pca_dat_out <- as.data.frame(out_pca$li) %>%
+                    rownames_to_column(var = "ind") %>%
+                    cbind(pop = pop(out)) %>%
+                    mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
+                    mutate(type = "out", loc.type = "haps", location = "all")
+
+out_pca <- ggplot(data = pca_dat_out) +
+    geom_point(aes(x = Axis1, y = Axis2, colour = pop), size = 3, alpha = 0.8) +
+    scale_colour_manual(values = pca_col$col) +
+    theme_minimal() +
+    labs(x = paste("", "Axis 1: ", eig_percent_out[1], "%"), y = paste("", "Axis 2: ", eig_percent_out[2], "%")) +
+    coord_fixed(ratio = 1)
+
+write_rds(neut_pca, here::here("data", "derived", "neut_pca.rds"))
+write_rds(out_pca, here::here("data", "derived", "out_pca.rds"))
+
+
+```
+
+
+# Combine PCA with a sample map
+
+```{r}
+##### Sample Map #####
+coords <- read.csv(here::here("data", "raw", "coords.csv"))
+
+coords$group <- as.factor(c(1, 2, 3, 4, 5, 6, 7, 8))
+
+world <- map_data("world") %>%
+    dplyr::rename(X = long, Y = lat, PID = group, POS = order) 
+
+# Clip the polygons in the region of interest to avoid problems with reconnecting lines
+world <- clipPolys(world, xlim = c(-12, 13), ylim = c(37, 66), keepExtra = TRUE)
+
+#svg(filename = "out/fig/raw/sample_map.svg", width = 9, height = 6, pointsize = 12, bg = "white")
+
+sample_map <- ggplot() +
+  geom_polygon(data = world, aes(x = X, y = Y, group = PID), alpha = 0.75, colour = "white", size = 0.05) +
+  geom_point(data = coords, aes(x = long, y = lat, colour = group), size = 4) +
+  geom_text(data = coords, aes(label = site, x = long, y = lat), fontface = "bold",
+              size = 3,
+              nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, -1.8, -2),
+              nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 0.3, 0)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
+  scale_colour_manual(values = pca_col$col) +
+  theme(legend.position = "none") +
+  labs(x = "",
+       y = "")
+```
+
+
+```{r}
+#comb_plot <- sample_map + neut_pca / out_pca + plot_layout(ncol = 2, widths = c(4, 3))
+
+comb_plot <- (neut_pca / out_pca) - sample_map + plot_layout(ncol = 2, widths = c(3, 4))
+
+comb_plot
+```
+
+# Genetic diversity
+
+```{r}
+gen <- read.vcfR(here::here("data", "raw", "out.17.recode.vcf")) %>%
+  vcfR2genind()
+
+pops <- tibble(ind = indNames(gen)) %>%
+  extract(ind, "pop", "(\\w+)_", remove = FALSE) %>%
+  pull(pop)
+
+pop(gen) <- pops
+
+# Calculate basic stats for each population
+pop_stats <- gen %>%
+  seppop() %>%
+  map(function(x) {
+    x %>%
+      genind2hierfstat() %>%
+      basic.stats() %>%
+      .$perloc %>%
+      rownames_to_column(var = "locus") %>%
+      extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+      as_tibble() %>%
+      mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+      select(locus, chrom, pos, Ho, Hs, Fst, Fis)
+  }) %>%
+  bind_rows()
+
+pop_stats <- gen %>%
+  seppop() %>%
+  map(function(x) {
+    pop_sum <- x %>%
+      summary()
+    
+    he_tbl <- pop_sum$He %>%
+      as.data.frame() %>%
+      rownames_to_column(var = "locus") %>%
+      `colnames<-`(c("locus", "he")) %>%
+      as_tibble() %>%
+      extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+      mutate(chrom = as.integer(chrom), pos = as.integer(pos)) %>%
+      mutate(pop = popNames(x))
+      
+    ho_tbl <- pop_sum$Ho %>%
+      as.data.frame() %>%
+      rownames_to_column(var = "locus") %>%
+      `colnames<-`(c("locus", "ho")) %>%
+      as_tibble()
+      
+    he_tbl %>%
+      left_join(ho_tbl, by = "locus") %>%
+      select(locus, chrom, pos, pop, he, ho)
+      
+  }) %>%
+  bind_rows()
+
+write_rds(pop_stats, here::here("data", "derived", "genetic_div.rds"))
+
+```
+
+Look at the genomic distribution of heterozygosity:
+
+```{r}
+# Read in the outlier data
+outlier_tbl <- read_rds(here::here("data", "derived", "outlier_summary.rds"))
+
+outs <- outlier_tbl %>%
+  filter(outlier == TRUE)
+
+div_tbl <- pop_stats %>%
+  mutate(outlier = if_else(locus %in% outs$locus, TRUE, FALSE))
+
+div_sum_2 <- div_tbl %>%
+  group_by(pop, outlier) %>%
+  summarise(mean_he = mean(he)) 
+
+
+div_tbl %>%
+  ggplot(aes(x = pop, y = ho, fill = outlier)) +
+  geom_boxplot()
+
+div_tbl %>%
+  arrange(desc(he))
+
+diff_tbl <- div_tbl %>%
+  mutate(diff = he - ho)
+
+diff_tbl %>%
+  filter(pop == "SE") %>%
+    ggplot(aes(x = pos, y = diff)) +
+  geom_point() +
+  facet_wrap(~chrom)
+
+```
+
+
+# Pairwise FST
+
+## By locality
+
+```{r}
+##### Pairwise Fst #####
+
+pop_order <- c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO")
+
+##### Neutral #####
+
+neut_fst <- neut %>%
+  genind2hierfstat() %>%
+  pairwise.WCfst()
+
+neut_boot <- neut %>%
+  genind2hierfstat() %>%
+  boot.ppfst(nboot = 1000)
+
+# Write the raw tables to a file
+list(neut_boot$ul, neut_boot$ll) %>%
+  purrr::map(as.data.frame) %>%
+  purrr::map(rownames_to_column, var = "pop") %>%
+  walk2(., c("neut_fst_ul.tsv", "neut_fst_ll.tsv"), ~write_tsv(.x, here::here("out", "tbl", .y)))
+
+# Make an upper triangular matrix of significant values
+neut_ll <- neut_boot$ll
+neut_ll[lower.tri(neut_ll)] = t(neut_ll)[lower.tri(neut_ll)]
+neut_sig <- neut_ll[pop_order, pop_order] %>%
+  as.data.frame() %>%
+  mutate_all(funs(if_else(. > 0, "+", "-"))) %>%
+  as.matrix()
+
+neut_fst_mat <- neut_fst[pop_order, pop_order]
+
+neut_fst_sig <- neut_fst_mat
+neut_fst_sig[upper.tri(neut_fst_sig)] <- neut_sig[upper.tri(neut_sig)]
+
+neut_fst_sig_tbl <- neut_fst_sig %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(neut_fst_sig_tbl, here::here("out", "tbl", "neut_fst.tsv"))
+
+neut_fst_mat <- neut_fst[pop_order, pop_order]
+
+neut_fst_wide <- neut_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(neut_fst_wide, here::here("out", "tbl", "neutral_fst_wide.tsv"))
+
+neut_fst_mat[upper.tri(neut_fst_mat)] <- NA
+
+neut_fst_tbl <- neut_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop") %>%
+  gather(pop2, fst, -pop) %>%
+  mutate(pop = factor(pop, levels = pop_order),
+         pop2 = factor(pop2, levels = pop_order)) %>%
+  mutate(fst = if_else(pop == pop2, min(fst, na.rm = TRUE), fst))
+
+
+ggplot(neut_fst_tbl, aes(x = pop, y = pop2)) +
+  geom_tile(aes(fill = fst))
+
+##### Outliers #####
+
+out_fst <- out %>%
+  genind2hierfstat() %>%
+  pairwise.WCfst()
+
+out_boot <- out %>%
+  boot.ppfst(nboot = 1000)
+
+# Write the raw tables to a file
+list(out_boot$ul, out_boot$ll) %>%
+  purrr::map(as.data.frame) %>%
+  purrr::map(rownames_to_column, var = "pop") %>%
+  walk2(., c("out_fst_ul.tsv", "out_fst_ll.tsv"), ~write_tsv(.x, here::here("out", "tbl", .y)))
+
+# Make an upper triangular matrix of significant values
+out_ll <- out_boot$ll
+out_ll[lower.tri(out_ll)] = t(out_ll)[lower.tri(out_ll)]
+out_sig <- out_ll[pop_order, pop_order] %>%
+  as.data.frame() %>%
+  mutate_all(funs(if_else(. > 0, "+", "-"))) %>%
+  as.matrix()
+
+out_fst_mat <- out_fst[pop_order, pop_order]
+
+out_fst_sig <- out_fst_mat
+out_fst_sig[upper.tri(out_fst_sig)] <- out_sig[upper.tri(out_sig)]
+
+out_fst_sig_tbl <- out_fst_sig %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(out_fst_sig_tbl, here::here("out", "tbl", "out_fst.tsv"))
+
+out_fst_wide <- out_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(out_fst_wide, here::here("out", "tbl", "outlier_fst_wide.tsv"))
+
+out_fst_mat[upper.tri(out_fst_mat)] <- NA
+
+out_fst_tbl <- out_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop") %>%
+  gather(pop2, fst, -pop) %>%
+  mutate(pop = factor(pop, levels = pop_order),
+         pop2 = factor(pop2, levels = pop_order)) %>%
+  mutate(fst = if_else(pop == pop2, min(fst, na.rm = TRUE), fst))
+
+ggplot(out_fst_tbl, aes(x = pop, y = pop2)) +
+  geom_tile(aes(fill = fst))
+
+```
+
+## By region
+
+```{r}
+##### Pairwise Fst #####
+
+pop_order <- c("ESP", "SCOT", "NOR")
+
+# Recode the populations regionally
+pop_tbl <- tibble(pop = pop(neut)) %>%
+  mutate(region = case_when(pop == "ESP" ~ "ESP",
+                            pop %in% c("SNO", "NNO") ~ "NOR",
+                            TRUE ~ "SCOT"))
+
+neut_reg <- neut
+pop(neut_reg) <- pop_tbl$region
+
+out_reg <- out
+pop(out_reg) <- pop_tbl$region
+
+
+##### Neutral #####
+
+
+
+neut_fst <- neut_reg %>%
+  genind2hierfstat() %>%
+  pairwise.WCfst()
+
+neut_boot <- neut_reg %>%
+  genind2hierfstat() %>%
+  boot.ppfst(nboot = 1000)
+
+# Write the raw tables to a file
+list(neut_boot$ul, neut_boot$ll) %>%
+  purrr::map(as.data.frame) %>%
+  purrr::map(rownames_to_column, var = "pop") %>%
+  walk2(., c("neut_reg_fst_ul.tsv", "neut_reg_fst_ll.tsv"), ~write_tsv(.x, here::here("out", "tbl", .y)))
+
+# Make an upper triangular matrix of significant values
+neut_ll <- neut_boot$ll
+neut_ll[lower.tri(neut_ll)] = t(neut_ll)[lower.tri(neut_ll)]
+neut_sig <- neut_ll[pop_order, pop_order] %>%
+  as.data.frame() %>%
+  mutate_all(funs(if_else(. > 0, "+", "-"))) %>%
+  as.matrix()
+
+neut_fst_mat <- neut_fst[pop_order, pop_order]
+
+neut_fst_sig <- neut_fst_mat
+neut_fst_sig[upper.tri(neut_fst_sig)] <- neut_sig[upper.tri(neut_sig)]
+
+neut_fst_sig_tbl <- neut_fst_sig %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(neut_fst_sig_tbl, here::here("out", "tbl", "neut_reg_fst.tsv"))
+
+neut_fst_mat <- neut_fst[pop_order, pop_order]
+
+neut_fst_wide <- neut_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(neut_fst_wide, here::here("out", "tbl", "neutral_reg_fst_wide.tsv"))
+
+neut_fst_mat[upper.tri(neut_fst_mat)] <- NA
+
+neut_fst_tbl <- neut_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop") %>%
+  gather(pop2, fst, -pop) %>%
+  mutate(pop = factor(pop, levels = pop_order),
+         pop2 = factor(pop2, levels = pop_order)) %>%
+  mutate(fst = if_else(pop == pop2, min(fst, na.rm = TRUE), fst))
+
+
+ggplot(neut_fst_tbl, aes(x = pop, y = pop2)) +
+  geom_tile(aes(fill = fst))
+
+##### Outliers #####
+
+out_fst <- out_reg %>%
+  genind2hierfstat() %>%
+  pairwise.WCfst()
+
+out_boot <- out_reg %>%
+  genind2hierfstat() %>%
+  boot.ppfst(nboot = 1000)
+
+# Write the raw tables to a file
+list(out_boot$ul, out_boot$ll) %>%
+  purrr::map(as.data.frame) %>%
+  purrr::map(rownames_to_column, var = "pop") %>%
+  walk2(., c("out_reg_fst_ul.tsv", "out_reg_fst_ll.tsv"), ~write_tsv(.x, here::here("out", "tbl", .y)))
+
+# Make an upper triangular matrix of significant values
+out_ll <- out_boot$ll
+out_ll[lower.tri(out_ll)] = t(out_ll)[lower.tri(out_ll)]
+out_sig <- out_ll[pop_order, pop_order] %>%
+  as.data.frame() %>%
+  mutate_all(funs(if_else(. > 0, "+", "-"))) %>%
+  as.matrix()
+
+out_fst_mat <- out_fst[pop_order, pop_order]
+
+out_fst_sig <- out_fst_mat
+out_fst_sig[upper.tri(out_fst_sig)] <- out_sig[upper.tri(out_sig)]
+
+out_fst_sig_tbl <- out_fst_sig %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+
+write_tsv(out_fst_sig_tbl, here::here("out", "tbl", "out_reg_fst.tsv"))
+
+out_fst_wide <- out_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop")
+  
+write_tsv(out_fst_wide, here::here("out", "tbl", "outlier_reg_fst_wide.tsv"))
+
+out_fst_mat[upper.tri(out_fst_mat)] <- NA
+
+out_fst_tbl <- out_fst_mat %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pop") %>%
+  gather(pop2, fst, -pop) %>%
+  mutate(pop = factor(pop, levels = pop_order),
+         pop2 = factor(pop2, levels = pop_order)) %>%
+  mutate(fst = if_else(pop == pop2, min(fst, na.rm = TRUE), fst))
+
+ggplot(out_fst_tbl, aes(x = pop, y = pop2)) +
+  geom_tile(aes(fill = fst))
+
+```
+
+
+# References
+

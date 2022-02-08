@@ -1,0 +1,575 @@
+---
+title: "Inversion Genotypes"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: hollaback::notebook_entry
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(tint)
+library(vcfR)
+library(adegenet)
+library(pantomime)
+library(tidyverse)
+library(ggforce)
+library(patchwork)
+library(ggmap)
+library(PBSmapping)
+library(scatterpie)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+pca_col <- read_tsv(file = here::here("data", "raw", "colors.tsv"))
+
+```
+
+# Import data
+
+First load the filtered SNP data and classify regions based on putative inversions:
+
+```{r}
+gen <- read.vcfR(here::here("data", "raw", "out.17.recode.vcf")) %>%
+  vcfR2genind()
+
+pops <- tibble(ind = indNames(gen)) %>%
+  extract(ind, "pop", "(\\w+)_", remove = FALSE) %>%
+  pull(pop)
+
+pop(gen) <- pops
+
+
+outlier_tbl <- read_rds(here::here("data", "derived", "outlier_summary.rds"))
+
+loc_tbl <- outlier_tbl %>%
+  mutate(inv = case_when(chrom == 12 & pos >= 2052968 & pos <= 12083837 ~ "chr12",
+                              chrom == 2 & pos >= 44727153 ~ "chr2",
+                              chrom == 8 & pos >= 5964894 & pos <= 23386594 ~ "chr8",
+                              TRUE ~ "none"))
+
+
+outliers <- outlier_tbl %>%
+  filter(any_outlier == TRUE) %>%
+  mutate(chrom = as.character(chrom))
+```
+
+
+# Chromosome 2 inversion
+
+Subset the chr2 inversion and plot a quick PCA:
+
+```{r}
+
+# Chr2
+chr2_loc <- loc_tbl %>%
+  filter(inv == "chr2") %>%
+  pull(locus)
+
+
+gen_2 <- gen[loc = chr2_loc]
+
+pca_2 <- qpca(gen_2, n_axes = 4) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO")))
+
+
+ggplot(pca_2, aes(x = Axis1, y = Axis2, col = pop)) +
+  geom_point() +
+  scale_colour_manual(values = pca_col$col)
+
+```
+
+It looks like there are three pretty clear clusters, as we'd expect.
+
+Now assign individuals to clusters using find.clusters() and PC1
+
+```{r}
+clst_2 <- find.clusters(gen_2, n.clust = 3, n.pca = 1)
+
+gen2_grp <- gen_2
+pop(gen2_grp) <- clst_2$grp
+
+# For unclear reasons, the group number assigned by find.clusters changes when rerunning, so for the purpose of coloring the plots consistently, I'm calling the configuration in Spain B/B
+
+chr2_grp_counts <- enframe(clst_2$grp) %>%
+  count(value)
+
+bb_grp2 <- which.min(chr2_grp_counts$n)
+aa_grp2 <- which.max(chr2_grp_counts$n)
+ab_grp2 <- which(! c(1:3) %in% c(aa_grp2, bb_grp2))
+
+pca_2_grp <- qpca(gen2_grp, n_axes = 4) %>%
+  mutate(grp = case_when(pop == aa_grp2 ~ "A/A",
+                         pop == ab_grp2 ~ "A/B",
+                         pop == bb_grp2 ~ "B/B")) %>%
+  arrange(grp)
+
+grp_pca <- ggplot(pca_2_grp, aes(x = -Axis1, y = Axis2, col = grp)) +
+  geom_point() +
+  scale_color_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme_minimal() +
+  labs(y = "PC 2", x = "PC 1") 
+
+grp_pca
+```
+
+Now classify these groups as B/B (Spain homozygote), A/B (inversion heterozygotes), A/A (other homozygote)
+
+```{r}
+chr2_grp_tbl <- pca_2_grp %>%
+  select(id = ind, group = pop, grp) %>%
+  arrange(grp)
+
+# Make a factor vector for ordering individuals when plotting
+grp_fct <- factor(chr2_grp_tbl$id, levels = chr2_grp_tbl$id)
+
+```
+
+We can check the proportions of these inversion genotypes in each sample:
+
+```{r}
+chr2_barplot <- chr2_grp_tbl %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE) %>%
+  group_by(pop) %>%
+  count(grp) %>%
+  mutate(prop = n / sum(n)) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
+  ggplot(aes(x = pop, y = prop, fill = grp)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme_minimal() +
+  labs(y = "Genotype Frequency", x = "Locality") 
+
+chr2_barplot
+
+
+chr2_inv_genos <- chr2_grp_tbl %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE)
+
+chr2_inv_gen <- df2genind(data.frame(chr2 = chr2_inv_genos$grp), ind.names = chr2_inv_genos$id, pop = chr2_inv_genos$pop,
+          sep = "/")
+
+hwe_test(chr2_inv_gen)
+
+```
+
+We can also check the levels of heterozygosity within these groups:
+
+```{r}
+chr2_stats <- get_locus_stats(gen2_grp) %>%
+  mutate(grp = case_when(pop == aa_grp2 ~ "A/A",
+                         pop == ab_grp2 ~ "A/B",
+                         pop == bb_grp2 ~ "B/B"))
+
+chr2_het_plot <- chr2_stats %>%
+  ggplot(aes(x = grp, y = ho, fill = grp)) +
+  geom_boxplot() +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme_minimal() +
+  labs(x = "", y = "Observed heterozygosity")
+
+chr2_het_plot
+
+chr2_stats %>%
+  group_by(pop) %>%
+  summarise(mean_ho = mean(ho, na.rm = TRUE))
+  
+
+```
+
+Now plot the distribution of genotypes along the inverted region for each group:
+
+```{r}
+# Find the allele that is most common in Spain to standardize the colors
+spain_alleles <- pantomime::get_allele_freqs(gen_2) %>%
+  filter(pop == "ESP") %>%
+  group_by(locus) %>%
+  arrange(desc(freq)) %>%
+  mutate(rn = row_number()) %>%
+  filter(rn == 1) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)") %>%
+  mutate(pos = as.integer(pos)) %>%
+  select(chrom, pos, allele) %>%
+  ungroup()
+
+# Make a factor vector for the position
+pos_fct <- tibble(locus = locNames(gen_2)) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(pos = as.integer(pos)) %>%
+  arrange(pos) %>%
+  pull(pos) %>%
+  as_factor()
+
+chr2_gt_tbl <- gen_2@tab %>%
+  as_tibble(rownames = "id") %>%
+  pivot_longer(-id, names_to = "locus_allele", values_to = "gt") %>%
+  extract(locus_allele, c("locus", "allele"), "(.*)\\.(.*)") %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)") %>%
+  mutate(pos = as.integer(pos)) %>%
+  semi_join(spain_alleles, by = c("chrom", "pos", "allele")) %>%
+  left_join(chr2_grp_tbl, by = "id")
+
+chr2_gt_tbl_mod <- chr2_gt_tbl %>%
+  semi_join(outliers, by = c("chrom", "pos")) %>%
+  mutate(pos = factor(pos, levels = pos_fct)) %>%
+  mutate(id = factor(id, levels = rev(grp_fct)))
+
+grp_counts <- chr2_grp_tbl %>%
+  count(grp)
+
+chr2_gt_plot <- ggplot(chr2_gt_tbl_mod, aes(y = pos, x = id, fill = as.factor(gt))) +
+  geom_tile() +
+  annotate(geom = "rect", xmin = 0.5, xmax = 25, ymin = 0.5, ymax = 9.5, alpha = 0, color = "yellow", size = 1) +
+  annotate(geom = "rect", xmin = 25 + 0.5, xmax = 25 + 52 + 0.5, ymin = 0.5, ymax = 9.5, alpha = 0, color = "yellow", size = 1) +
+  annotate(geom = "rect", xmin = 25 + 52 + 0.5, xmax = 25 + 52 + 124 + 0.5, ymin = 0.5, ymax = 9.5, alpha = 0, color = "yellow", size = 1) +
+  scale_fill_manual(name = "Genotype", breaks = c("0", "1", "2"), values = hollaback::cmh_palette[c(5, 2, 3, 1)], labels = c("0/0", "0/1", "1/1"), na.value = "darkgrey") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  labs(y = "SNP Position", x = "Individual") 
+  
+
+chr2_gt_plot
+```
+
+Try a map:
+
+```{r}
+coords <- read_csv(here::here("data", "raw", "coords.csv")) %>%
+  rename(pop = site)
+
+coords$group <- as.factor(c(1, 2, 3, 4, 5, 6, 7, 8))
+
+inv_dat <- chr2_grp_tbl %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE) %>%
+  group_by(pop) %>%
+  count(grp) %>%
+  pivot_wider(names_from = grp, values_from = n) %>%
+  replace_na(list(`A/A` = 0, `A/B` = 0, `B/B` = 0)) %>%
+  right_join(coords, by = "pop") %>%
+  rename(A = `A/A`, B = `A/B`, C = `B/B`)
+
+world <- map_data("world") %>%
+  dplyr::rename(X = long, Y = lat, PID = group, POS = order) 
+
+# Clip the polygons in the region of interest to avoid problems with reconnecting lines
+world <- clipPolys(world, xlim = c(-12, 13), ylim = c(37, 66), keepExtra = TRUE)
+
+#svg(filename = "out/fig/raw/sample_map.svg", width = 9, height = 6, pointsize = 12, bg = "white")
+
+chr2_pie_map <- ggplot() +
+  geom_polygon(data = world, aes(x = X, y = Y, group = PID), alpha = 0.75, colour = "white", size = 0.05) +
+  geom_scatterpie(aes(x=long, y=lat, group=pop), data=inv_dat,
+                           cols=c("A", "B", "C"), size = 0.5, pie_scale = 2) +
+  geom_text(data = coords, aes(label = pop, x = long, y = lat), fontface = "bold",
+            size = 3,
+            nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, -1.8, -2),
+            nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 0.3, 0)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
+   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme(legend.position = "none") +
+  labs(x = "",
+       y = "")
+
+chr2_pie_map
+```
+
+Save the plots to a file:
+
+```{r}
+write_rds(list(gt = chr2_gt_plot, pca = grp_pca, barplot = chr2_barplot, map = chr2_pie_map), file = "data/derived/chr2_inversion_plots.rds")
+```
+
+
+
+# Chromosome 12 inversion
+
+Subset the chr12 inversion and plot a quick PCA:
+
+```{r}
+
+# Chr2
+chr12_loc <- loc_tbl %>%
+  filter(inv == "chr12") %>%
+  pull(locus)
+
+
+gen_12 <- gen[loc = chr12_loc]
+
+pca_12 <- qpca(gen_12, n_axes = 4) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO")))
+
+
+ggplot(pca_12, aes(x = Axis1, y = Axis2, col = pop)) +
+  geom_point() +
+  scale_colour_manual(values = pca_col$col) +
+  theme_minimal()
+
+```
+
+This is less clear than Chr2, but there are still three clusters here
+
+Now assign individuals to clusters using find.clusters() and PC1
+
+```{r}
+clst_12 <- find.clusters(gen_12, n.clust = 3, n.pca = 1)
+
+gen12_grp <- gen_12
+pop(gen12_grp) <- clst_12$grp
+
+# For unclear reasons, the group number assigned by find.clusters changes when rerunning, so for the purpose of coloring the plots consistently, I'm calling the configuration in Spain B/B
+
+chr12_grp_counts <- enframe(clst_12$grp) %>%
+  count(value)
+
+bb_grp12 <- which.min(chr12_grp_counts$n)
+ab_grp12 <- which.max(chr12_grp_counts$n)
+aa_grp12 <- which(! c(1:3) %in% c(ab_grp12, bb_grp12))
+
+pca_12_grp <- qpca(gen12_grp, n_axes = 4) %>%
+  mutate(grp = case_when(pop == aa_grp12 ~ "A/A",
+                         pop == ab_grp12 ~ "A/B",
+                         pop == bb_grp12 ~ "B/B")) %>%
+  arrange(grp)
+
+grp_pca_12 <- ggplot(pca_12_grp, aes(x = Axis1, y = Axis2, col = grp)) +
+  geom_point() +
+  scale_color_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme_minimal() +
+  labs(y = "PC 2", x = "PC 1") 
+
+grp_pca_12
+
+```
+
+Now classify these groups as B/B (Spain homozygote), A/B (inversion heterozygotes), A/A (other homozygote)
+
+```{r}
+chr12_grp_tbl <- pca_12_grp %>%
+  select(id = ind, group = pop, grp) %>%
+  arrange(grp)
+
+# Make a factor vector for ordering individuals when plotting
+grp_fct <- factor(chr12_grp_tbl$id, levels = chr12_grp_tbl$id)
+
+```
+
+We can check the proportions of these inversion genotypes in each sample:
+
+```{r}
+chr12_barplot <- chr12_grp_tbl %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE) %>%
+  group_by(pop) %>%
+  count(grp) %>%
+  mutate(prop = n / sum(n)) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
+  ggplot(aes(x = pop, y = prop, fill = grp)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme_minimal() +
+  labs(y = "Genotype Frequency", x = "Locality") 
+
+chr12_barplot
+
+chr12_inv_genos <- chr12_grp_tbl %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE)
+
+chr12_inv_gen <- df2genind(data.frame(chr12 = chr12_inv_genos$grp), ind.names = chr12_inv_genos$id, pop = chr12_inv_genos$pop,
+          sep = "/")
+
+hwe_test(chr12_inv_gen)
+
+
+
+
+```
+
+We can also check the levels of heterozygosity within these groups:
+
+```{r}
+chr12_stats <- get_locus_stats(gen12_grp) %>%
+  mutate(grp = case_when(pop == aa_grp12 ~ "A/A",
+                         pop == ab_grp12 ~ "A/B",
+                         pop == bb_grp12 ~ "B/B"))
+
+chr12_het_plot <- chr12_stats %>%
+  ggplot(aes(x = grp, y = ho, fill = grp)) +
+  geom_boxplot() +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme_minimal() +
+  labs(x = "", y = "Observed heterozygosity")
+
+chr12_stats %>%
+  group_by(pop) %>%
+  summarise(mean_ho = mean(ho, na.rm = TRUE))
+  
+chr12_het_plot
+```
+
+Now plot the distribution of genotypes along the inverted region for each group:
+
+```{r}
+# Find the allele that is most common in Spain to standardize the colors
+spain_alleles <- pantomime::get_allele_freqs(gen_12) %>%
+  filter(pop == "ESP") %>%
+  group_by(locus) %>%
+  arrange(desc(freq)) %>%
+  mutate(rn = row_number()) %>%
+  filter(rn == 1) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)") %>%
+  mutate(pos = as.integer(pos)) %>%
+  select(chrom, pos, allele) %>%
+  ungroup()
+
+# Make a factor vector for the position
+pos_fct <- tibble(locus = locNames(gen_12)) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(pos = as.integer(pos)) %>%
+  arrange(pos) %>%
+  pull(pos) %>%
+  as_factor()
+
+chr12_gt_tbl <- gen_12@tab %>%
+  as_tibble(rownames = "id") %>%
+  pivot_longer(-id, names_to = "locus_allele", values_to = "gt") %>%
+  extract(locus_allele, c("locus", "allele"), "(.*)\\.(.*)") %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE) %>%
+  extract(locus, c("chrom", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)") %>%
+  mutate(pos = as.integer(pos)) %>%
+  semi_join(spain_alleles, by = c("chrom", "pos", "allele")) %>%
+  left_join(chr12_grp_tbl, by = "id")
+
+chr12_gt_tbl_mod <- chr12_gt_tbl %>%
+  semi_join(outliers, by = c("chrom", "pos")) %>%
+  mutate(pos = factor(pos, levels = pos_fct)) %>%
+  mutate(id = factor(id, levels = rev(grp_fct)))
+
+grp_counts <- chr12_grp_tbl %>%
+  count(grp)
+
+chr12_gt_plot <- ggplot(chr12_gt_tbl_mod, aes(y = pos, x = id, fill = as.factor(gt))) +
+  geom_tile() +
+  annotate(geom = "rect", xmin = 0.5, xmax = 35, ymin = 0.5, ymax = 11.5, alpha = 0, color = "yellow", size = 1) +
+  annotate(geom = "rect", xmin = 35 + 0.5, xmax = 35 + 85 + 0.5, ymin = 0.5, ymax = 11.5, alpha = 0, color = "yellow", size = 1) +
+  annotate(geom = "rect", xmin = 35 + 85 + 0.5, xmax = 35 + 85 + 81 + 0.5, ymin = 0.5, ymax = 11.5, alpha = 0, color = "yellow", size = 1) +
+  scale_fill_manual(name = "Genotype", breaks = c("0", "1", "2"), values = hollaback::cmh_palette[c(5, 2, 3)], labels = c("0/0", "0/1", "1/1"), na.value = "darkgrey") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  labs(y = "SNP Position", x = "Individual") 
+  
+
+chr12_gt_plot
+
+```
+
+Try a map:
+
+```{r}
+coords <- read_csv(here::here("data", "raw", "coords.csv")) %>%
+  rename(pop = site)
+
+coords$group <- as.factor(c(1, 2, 3, 4, 5, 6, 7, 8))
+
+inv_dat <- chr12_grp_tbl %>%
+  extract(id, c("id", "pop"), "((\\w+)_\\d+)", remove = FALSE) %>%
+  group_by(pop) %>%
+  count(grp) %>%
+  pivot_wider(names_from = grp, values_from = n) %>%
+  replace_na(list(`A/A` = 0, `A/B` = 0, `B/B` = 0)) %>%
+  right_join(coords, by = "pop") %>%
+  rename(A = `A/A`, B = `A/B`, C = `B/B`)
+
+world <- map_data("world") %>%
+  dplyr::rename(X = long, Y = lat, PID = group, POS = order) 
+
+# Clip the polygons in the region of interest to avoid problems with reconnecting lines
+world <- clipPolys(world, xlim = c(-12, 13), ylim = c(37, 66), keepExtra = TRUE)
+
+#svg(filename = "out/fig/raw/sample_map.svg", width = 9, height = 6, pointsize = 12, bg = "white")
+
+chr12_pie_map <- ggplot() +
+  geom_polygon(data = world, aes(x = X, y = Y, group = PID), alpha = 0.75, colour = "white", size = 0.05) +
+  geom_scatterpie(aes(x=long, y=lat, group=pop), data=inv_dat,
+                           cols=c("A", "B", "C"), size = 0.5, pie_scale = 2) +
+  geom_text(data = coords, aes(label = pop, x = long, y = lat), fontface = "bold",
+            size = 3,
+            nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, -1.8, -2),
+            nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 0.3, 0)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
+   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme(legend.position = "none") +
+  labs(x = "",
+       y = "")
+
+chr12_pie_map2 <- ggplot() +
+  geom_polygon(data = world, aes(x = X, y = Y, group = PID), alpha = 0.75, colour = "white", size = 0.05) +
+  geom_scatterpie(aes(x=long, y=lat, group=pop), data=inv_dat,
+                           cols=c("A", "B", "C"), size = 0.5, pie_scale = 2) +
+  geom_text(data = coords, aes(label = pop, x = long, y = lat), fontface = "bold",
+            size = 3,
+            nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, -1.8, -2),
+            nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 0.3, 0)) + 
+  theme_void() +
+  theme(plot.title = element_text(size = 14),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
+   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  theme(legend.position = "none") +
+  labs(x = "",
+       y = "")
+
+chr12_pie_map
+
+```
+
+```{r}
+write_rds(list(gt = chr12_gt_plot, pca = grp_pca_12, barplot = chr12_barplot, map = chr12_pie_map), file = "data/derived/chr12_inversion_plots.rds")
+```
+
+
+# Chromosome 8 Inversion
+
+Subset the chr8 inversion and plot a quick PCA:
+
+```{r}
+
+# Chr8
+chr8_loc <- loc_tbl %>%
+  filter(inv == "chr8") %>%
+  pull(locus)
+
+
+gen_8 <- gen[loc = chr8_loc]
+
+pca_8 <- qpca(gen_8, n_axes = 4) %>%
+  mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO")))
+
+
+chr8_pca <- ggplot(pca_8, aes(x = Axis1, y = Axis2, col = pop)) +
+  geom_point() +
+  scale_colour_manual(values = pca_col$col) +
+  theme_minimal()
+
+write_rds(chr8_pca, file = "data/derived/chr8_inversion_plots.rds")
+
+```
+
+It is not very clear what is going on here, but there are at least two important PCs.

@@ -1,0 +1,144 @@
+    ---
+title: "Gene region analysis"
+author: "Chris Hollenbeck"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(adegenet)
+
+source("bin/functions.R")
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+# Extract outlier regions
+
+Read in the data:
+
+```{r}
+outlier_tbl <- read_rds(here::here("data", "derived", "outlier_summary.rds"))
+out <- read_rds(here::here("data", "derived", "outlier_genind.rds"))
+```
+
+```{r}
+# Plot a PCA for the outlier loci
+x_out <- scaleGen(out, NA.method = "mean")
+out_pca <- dudi.pca(x_out, center = FALSE, scale = FALSE, scannf = FALSE, nf = 4)
+
+out_grps <- out_pca$c1 %>%
+  as_tibble(rownames = "locus") %>%
+  mutate_at(vars(contains("CS")), ~abs(.)) %>%
+  extract(locus, c("locus", "allele"), "(HiC_scaffold_\\d+_arrow_ctg1_\\d+).(\\d)") %>%
+  extract(locus, c("chr", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(pos = as.integer(pos)) %>%
+  group_by(locus) %>%
+  top_n(1, allele) %>%
+  ungroup() %>%
+  mutate(grp = if_else(CS1 > CS2, "1", "2"),
+         val = if_else(CS1 > CS2, CS1, CS2))
+
+
+ggplot(out_grps, aes(x = pos, y = val, color = grp)) +
+  geom_col() +
+  facet_wrap(~chr)
+
+
+```
+
+Now further refine groups manually based outlier clusters:
+
+```{r}
+out_grp_mod <- out_grps %>%
+  mutate(final_grp = case_when(locus == "HiC_scaffold_2_arrow_ctg1_10017512" ~ "2",
+                               chr %in% c("2", "6", "8", "12", "18") ~ "1",
+                               TRUE ~ "2"))
+
+ggplot(out_grp_mod, aes(x = pos, y = val, color = final_grp)) +
+  geom_col() +
+  facet_wrap(~chr)
+
+```
+
+Now get a get of genomic coordinates representing the regions surrounding the outliers:
+
+```{r}
+out_intervals <- out_grp_mod %>%
+  select(locus, chr, pos, final_grp) %>%
+  mutate(left_bound = case_when(chr == "2" & pos >= 43819604 ~ 43819604 - 25000,
+                                chr == "8" & pos >= 7805171 ~ 7805171 - 25000,
+                                chr == "12" & pos >= 1468734 ~ 1468734 - 25000,
+                                TRUE ~ pos - 25000),
+         right_bound = case_when(chr == "2" & pos >= 43819604 ~ 55023173 + 25000,
+                                chr == "8" & pos >= 7805171 ~ 22784329 + 25000,
+                                chr == "12" & pos >= 1468734 ~ 12766088 + 25000,
+                                TRUE ~ pos + 25000))
+
+unique_intervals <- out_intervals %>%
+  distinct(left_bound, right_bound, .keep_all = TRUE)
+
+```
+
+
+# Extract genes
+
+```{r}
+anno_file <- read_tsv(here::here("data", "raw", "genome", "Pecten_maximus_high_confidence_genes.gtf"), col_names = FALSE)
+
+gene_file <- read_tsv(here::here("data", "raw", "genome", "SupplementaryFile2.txt"), col_names = FALSE) %>%
+  extract(X1, c("gene_id", "transcript_id"), "(\\w+)\\.(\\w+)")
+
+```
+
+Loop through the intervals and extract the genes:
+
+```{r}
+cand_genes <- unique_intervals %>%
+  mutate(num = row_number()) %>%
+  split(.$num) %>%
+  map(function(x) {
+    
+    chrom <- x %>%
+      extract(locus, "chrom",  "(HiC_scaffold_\\d+_arrow_ctg1)") %>%
+      pull(chrom)
+    
+    anno_file %>%
+      filter(X1 == chrom) %>%
+      filter(X3 == "gene") %>%
+      filter(X4 > x$left_bound, X5 < x$right_bound)
+    
+  }) %>%
+  bind_rows() %>%
+  select(chrom = X1, start = X4, end = X5, gene_id = X9) %>%
+  left_join(gene_file, by = "gene_id") %>%
+  mutate(sel_grp = case_when(chrom == "HiC_scaffold_12_arrow_ctg1" ~ 1,
+                             chrom == "HiC_scaffold_8_arrow_ctg1" ~ 1,
+                             chrom == "HiC_scaffold_6_arrow_ctg1" ~ 1,
+                             chrom == "HiC_scaffold_6_arrow_ctg1" ~ 1,
+                             chrom == "HiC_scaffold_2_arrow_ctg1" & start > 30000000 ~ 1,
+                             TRUE ~ 2)) %>%
+  distinct(gene_id, .keep_all = TRUE) %>%
+  select(-X4, -X5) %>%
+  rename(accession = X2, desc = X3)
+
+cand_genes %>%
+  filter(sel_grp == 2)
+
+cand_genes %>%
+  filter(sel_grp == 1)
+
+write_csv(cand_genes, file = here::here("data", "derived", "cand_genes.csv"))
+    
+```
+
+# References
+
