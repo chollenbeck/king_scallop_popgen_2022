@@ -2,7 +2,7 @@
 title: "Inversion Genotypes"
 author: "Chris Hollenbeck"
 date: "`r Sys.Date()`"
-output: hollaback::notebook_entry
+output: notebook_entry
 bibliography: skeleton.bib
 link-citations: yes
 ---
@@ -113,7 +113,7 @@ pca_2_grp <- qpca(gen2_grp, n_axes = 4) %>%
 
 grp_pca <- ggplot(pca_2_grp, aes(x = -Axis1, y = Axis2, col = grp)) +
   geom_point() +
-  scale_color_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  scale_color_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = cmh_palette[c(5, 2, 3)]) +
   theme_minimal() +
   labs(y = "PC 2", x = "PC 1") 
 
@@ -143,7 +143,7 @@ chr2_barplot <- chr2_grp_tbl %>%
   mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
   ggplot(aes(x = pop, y = prop, fill = grp)) +
   geom_bar(stat = "identity") +
-  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = cmh_palette[c(5, 2, 3)]) +
   theme_minimal() +
   labs(y = "Genotype Frequency", x = "Locality") 
 
@@ -171,7 +171,7 @@ chr2_stats <- get_locus_stats(gen2_grp) %>%
 chr2_het_plot <- chr2_stats %>%
   ggplot(aes(x = grp, y = ho, fill = grp)) +
   geom_boxplot() +
-  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = cmh_palette[c(5, 2, 3)]) +
   theme_minimal() +
   labs(x = "", y = "Observed heterozygosity")
 
@@ -230,7 +230,7 @@ chr2_gt_plot <- ggplot(chr2_gt_tbl_mod, aes(y = pos, x = id, fill = as.factor(gt
   annotate(geom = "rect", xmin = 0.5, xmax = 25, ymin = 0.5, ymax = 9.5, alpha = 0, color = "yellow", size = 1) +
   annotate(geom = "rect", xmin = 25 + 0.5, xmax = 25 + 52 + 0.5, ymin = 0.5, ymax = 9.5, alpha = 0, color = "yellow", size = 1) +
   annotate(geom = "rect", xmin = 25 + 52 + 0.5, xmax = 25 + 52 + 124 + 0.5, ymin = 0.5, ymax = 9.5, alpha = 0, color = "yellow", size = 1) +
-  scale_fill_manual(name = "Genotype", breaks = c("0", "1", "2"), values = hollaback::cmh_palette[c(5, 2, 3, 1)], labels = c("0/0", "0/1", "1/1"), na.value = "darkgrey") +
+  scale_fill_manual(name = "Genotype", breaks = c("0", "1", "2"), values = cmh_palette[c(5, 2, 3, 1)], labels = c("0/0", "0/1", "1/1"), na.value = "darkgrey") +
   theme_minimal() +
   theme(axis.text.x = element_blank(),
         axis.ticks.x = element_blank()) +
@@ -278,7 +278,7 @@ chr2_pie_map <- ggplot() +
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
-   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = cmh_palette[c(5, 2, 3)]) +
   theme(legend.position = "none") +
   labs(x = "",
        y = "")
@@ -346,7 +346,7 @@ pca_12_grp <- qpca(gen12_grp, n_axes = 4) %>%
 
 grp_pca_12 <- ggplot(pca_12_grp, aes(x = Axis1, y = Axis2, col = grp)) +
   geom_point() +
-  scale_color_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  scale_color_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = cmh_palette[c(5, 2, 3)]) +
   theme_minimal() +
   labs(y = "PC 2", x = "PC 1") 
 
@@ -377,7 +377,7 @@ chr12_barplot <- chr12_grp_tbl %>%
   mutate(pop = factor(pop, levels = c("ESP", "SW", "SE", "NW", "NE", "SLD", "SNO", "NNO"))) %>%
   ggplot(aes(x = pop, y = prop, fill = grp)) +
   geom_bar(stat = "identity") +
-  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = cmh_palette[c(5, 2, 3)]) +
   theme_minimal() +
   labs(y = "Genotype Frequency", x = "Locality") 
 
@@ -407,7 +407,7 @@ chr12_stats <- get_locus_stats(gen12_grp) %>%
 chr12_het_plot <- chr12_stats %>%
   ggplot(aes(x = grp, y = ho, fill = grp)) +
   geom_boxplot() +
-  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+  scale_fill_manual(name = "Inversion genotype", breaks = c("A/A", "A/B", "B/B"), values = cmh_palette[c(5, 2, 3)]) +
   theme_minimal() +
   labs(x = "", y = "Observed heterozygosity")
 
@@ -464,7 +464,7 @@ chr12_gt_plot <- ggplot(chr12_gt_tbl_mod, aes(y = pos, x = id, fill = as.factor(
   annotate(geom = "rect", xmin = 0.5, xmax = 35, ymin = 0.5, ymax = 11.5, alpha = 0, color = "yellow", size = 1) +
   annotate(geom = "rect", xmin = 35 + 0.5, xmax = 35 + 85 + 0.5, ymin = 0.5, ymax = 11.5, alpha = 0, color = "yellow", size = 1) +
   annotate(geom = "rect", xmin = 35 + 85 + 0.5, xmax = 35 + 85 + 81 + 0.5, ymin = 0.5, ymax = 11.5, alpha = 0, color = "yellow", size = 1) +
-  scale_fill_manual(name = "Genotype", breaks = c("0", "1", "2"), values = hollaback::cmh_palette[c(5, 2, 3)], labels = c("0/0", "0/1", "1/1"), na.value = "darkgrey") +
+  scale_fill_manual(name = "Genotype", breaks = c("0", "1", "2"), values = cmh_palette[c(5, 2, 3)], labels = c("0/0", "0/1", "1/1"), na.value = "darkgrey") +
   theme_minimal() +
   theme(axis.text.x = element_blank(),
         axis.ticks.x = element_blank()) +
@@ -513,7 +513,7 @@ chr12_pie_map <- ggplot() +
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
-   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = cmh_palette[c(5, 2, 3)]) +
   theme(legend.position = "none") +
   labs(x = "",
        y = "")
@@ -531,7 +531,7 @@ chr12_pie_map2 <- ggplot() +
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
-   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = hollaback::cmh_palette[c(5, 2, 3)]) +
+   scale_fill_manual(name = "Inversion genotype", breaks = c("A", "B", "C"), values = cmh_palette[c(5, 2, 3)]) +
   theme(legend.position = "none") +
   labs(x = "",
        y = "")
