@@ -177,4 +177,3 @@ read_tsv("all_sites_16.txt", col_names = FALSE) %>%
   write_tsv("sites_to_keep_16.txt", col_names = FALSE)
 
 system("vcftools --vcf out.16.vcf --out out.17 --positions sites_to_keep_16.txt --recode --recode-INFO-all")
-
