@@ -97,6 +97,59 @@ write_rds(out_pca, here::here("data", "derived", "out_pca.rds"))
 
 ```
 
+## Scottish Populations only
+
+```{r}
+
+scot_pops <- c("SW", "SE", "NW", "NE", "SLD")
+
+out_scot <- out[pop = scot_pops]
+neut_scot <- neut[pop = scot_pops]
+
+# Plot a PCA for the neutral loci
+x_neut_scot <- scaleGen(neut_scot, NA.method = "mean")
+neut_pca_scot <- dudi.pca(x_neut_scot, center = FALSE, scale = FALSE, scannf = FALSE, nf = 4)
+eig_percent_neut_scot <- round((neut_pca_scot$eig / (sum(neut_pca_scot$eig))) * 100, 2)
+
+pca_dat_neut_scot <- as.data.frame(neut_pca_scot$li) %>%
+                    rownames_to_column(var = "ind") %>%
+                    cbind(pop = pop(neut_scot)) %>%
+                    mutate(pop = factor(pop, levels = c("SW", "SE", "NW", "NE", "SLD"))) %>%
+                    mutate(type = "neut", loc.type = "haps", location = "all")
+
+
+neut_pca_scot <- ggplot(data = pca_dat_neut_scot) +
+    geom_point(aes(x = Axis1, y = Axis2, colour = pop), size = 3, alpha = 0.8) +
+    #scale_colour_manual(values = pca_col$col) +
+    theme_minimal() +
+    labs(x = paste("", "Axis 1: ", eig_percent_neut[1], "%"), y = paste("", "Axis 2: ", eig_percent_neut[2], "%")) +
+    coord_fixed(ratio = 1)
+
+# Plot a PCA for the outlier loci
+x_out_scot <- scaleGen(out_scot, NA.method = "mean")
+out_pca_scot <- dudi.pca(x_out_scot, center = FALSE, scale = FALSE, scannf = FALSE, nf = 4)
+
+eig_percent_out_scot <- round((out_pca_scot$eig / (sum(out_pca_scot$eig))) * 100, 2)
+
+pca_dat_out_scot <- as.data.frame(out_pca_scot$li) %>%
+                    rownames_to_column(var = "ind") %>%
+                    cbind(pop = pop(out_scot)) %>%
+                    mutate(pop = factor(pop, levels = c("SW", "SE", "NW", "NE", "SLD"))) %>%
+                    mutate(type = "out", loc.type = "haps", location = "all")
+
+out_pca_scot <- ggplot(data = pca_dat_out_scot) +
+    geom_point(aes(x = Axis1, y = Axis2, colour = pop), size = 3, alpha = 0.8) +
+    #scale_colour_manual(values = pca_col$col) +
+    theme_minimal() +
+    labs(x = paste("", "Axis 1: ", eig_percent_out[1], "%"), y = paste("", "Axis 2: ", eig_percent_out[2], "%")) +
+    coord_fixed(ratio = 1)
+
+scot_pca_plot <- neut_pca_scot + out_pca_scot + plot_annotation(tag_levels = "A")
+
+ggsave(here::here("out", "fig", "scot_pca.png"), plot = scot_pca_plot, width = 25, height = 15, units = "cm")
+
+```
+
 
 # Combine PCA with a sample map
 

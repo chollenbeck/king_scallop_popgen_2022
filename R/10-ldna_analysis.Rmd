@@ -1,0 +1,408 @@
+---
+title: "LDNa Analysis"
+author: "Chris Hollenbeck"
+date: "6/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(adegenet)
+library(gaston)
+library(vcfR)
+library(gridExtra)
+library(LDna)
+library(ggnetwork)
+library(patchwork)
+
+CONDA_PATH <- Sys.getenv("CONDA_PATH")
+CONDA_ENV <- "scalpop"
+
+# Set some useful options 
+knitr::opts_chunk$set()
+
+```
+
+Import the phased VCF file and convert to BED format:
+
+```{r}
+# Read in the genind object with all of the SNPs
+#gen_snps <- read_rds(here::here("data", "derived", "out_snps_gen.rds"))
+gen <- read.vcfR(here::here("data", "derived", "out.17.phased.vcf")) %>%
+  vcfR2genind()
+
+pops <- tibble(ind = indNames(gen)) %>%
+  tidyr::extract(ind, "pop", "(\\w+)_", remove = FALSE) %>%
+  pull(pop)
+
+pop(gen) <- pops
+
+
+snp_tbl <- tibble(locus = locNames(gen)) %>%
+  tidyr::extract(locus, c("scaffold", "pos"), "(HiC_scaffold_\\d+_arrow_ctg1)_(\\d+)", remove = FALSE) %>%
+  tidyr::extract(locus, "scaffold_num", "scaffold_(\\d+)_arrow_ctg1", remove = FALSE) %>%
+  mutate(scaffold_num = as.character(scaffold_num)) %>%
+  mutate(pos = as.integer(pos)) %>%
+  select(snp_id = locus, chr = scaffold_num, pos)
+
+chr_length <- snp_tbl %>%
+  group_by(chr) %>%
+  filter(pos == max(pos)) %>%
+  select(chr, length = pos)
+
+
+# Recode the populations regionally
+pop_tbl <- tibble(pop = pop(gen)) %>%
+  mutate(region = case_when(pop == "ESP" ~ "ESP",
+                            pop %in% c("SNO", "NNO") ~ "NOR",
+                            TRUE ~ "SCOT"))
+
+gen_reg <- gen
+pop(gen_reg) <- pop_tbl$region
+
+gen_all <- gen
+pop(gen_all) <- rep("all", nInd(gen_all))
+
+bed_lst <- gen_reg %>%
+  seppop() %>%
+  map(function(x) {
+    
+    pop_name <- popNames(x)
+    df <- genind2df(x) %>%
+      mutate_all(~str_replace_all(., "00", "0")) %>%
+      mutate_all(~str_replace_all(., "01", "1")) %>%
+      mutate_all(~str_replace_all(., "10", "1")) %>%
+      mutate_all(~str_replace_all(., "11", "2")) %>%
+      select(-pop) %>%
+      as.matrix()
+    gl <- as.genlight(df)
+    gafftop::genlight_to_bed(gl, snp_tbl) 
+      
+  })
+
+
+df_all <- genind2df(gen_all) %>%
+      mutate_all(~str_replace_all(., "00", "0")) %>%
+      mutate_all(~str_replace_all(., "01", "1")) %>%
+      mutate_all(~str_replace_all(., "10", "1")) %>%
+      mutate_all(~str_replace_all(., "11", "2")) %>%
+      select(-pop) %>%
+      as.matrix()
+gl_all <- as.genlight(df_all)
+bed_all <- gafftop::genlight_to_bed(gl_all, snp_tbl)
+
+
+# Get the loci within the putative inversion
+inv_tbl <- snp_tbl %>%
+  mutate(inv = case_when(chr == 12 & pos >= 2052968 & pos <= 12083837 ~ "chr12",
+                              chr == 2 & pos >= 44727153 ~ "chr2",
+                              chr == 8 & pos >= 5964894 & pos <= 23386594 ~ "chr8",
+                              TRUE ~ "none")) %>%
+  select(name = snp_id, inv)
+
+
+```
+
+# Chromosome 2 analysis
+
+```{r}
+
+chr_snps <- select.snps(bed_all, chr == 2)
+ld <- LD(chr_snps, c(1, nrow(chr_snps@snps)))
+ld[is.nan(ld)] <- 0
+
+ld[lower.tri(ld)] <- NA
+
+LD.plot(ld)
+
+ldna <- LDnaRaw(ld)
+
+# Plot the entire network with low threshold for visualization
+ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
+
+nw <- ggnetwork(ig) %>%
+  left_join(inv_tbl, by = "name") %>%
+  mutate(pop = names(bed_lst[i]), chr = j)
+
+chr2_network <- ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(aes(alpha = weight)) +
+  geom_nodes(aes(color = inv)) +
+  scale_alpha_continuous(name = "LD") +
+  scale_color_discrete(type = c("red", "#404040"), name = "Region") +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        strip.text = element_text(size = 12, face = "bold"))
+
+# Extract the single-outlier clusters and summarize
+clusters <- extractBranches(ldna, min.edges=1)
+
+summary1 <- summaryLDna(ldna, clusters, ld)
+
+# Keep only clusters with more than 2 loci
+filt_clusters2 <- summary1 %>%
+  filter(nLoci > 3)
+
+filt_cluster_names2 <- filt_clusters2 %>%
+  pull(Name)
+
+clust_tbl2 <- clusters[filt_cluster_names2] %>%
+  map2(.y = names(.), function(x, y) {
+    tibble(cluster = y, locus = x)
+  }) %>%
+  bind_rows() %>%
+  tidyr::extract(locus, c("chrom_num", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom_num = as.integer(chrom_num), pos = as.integer(pos))
+  
+# Plot the position of the clusters
+chr_end <- chr_length$length[chr_length$chr == "2"]
+
+chr2_chr <- ggplot(clust_tbl2, aes(x = pos, y = 0.1)) +
+  geom_point(aes(color = cluster)) +
+  xlim(0, chr_end) +
+  ylim(0.05, 0.15) +
+  labs(x = "chromosomal position") +
+  geom_segment(x = 0, xend = chr_end, y = 0.095, yend = 0.095) +
+  geom_segment(x = 0, xend = 0, y = 0.095, yend = 0.1) +
+  geom_segment(x = chr_end, xend = chr_end, y = 0.1, yend = 0.095) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank()) 
+  
+
+```
+
+# Chromosome 8 analysis
+
+```{r}
+
+chr_snps <- select.snps(bed_all, chr == 8)
+ld <- LD(chr_snps, c(1, nrow(chr_snps@snps)))
+ld[is.nan(ld)] <- 0
+
+ld[lower.tri(ld)] <- NA
+
+LD.plot(ld)
+
+ldna <- LDnaRaw(ld)
+
+# Plot the entire network with low threshold for visualization
+ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
+
+nw <- ggnetwork(ig) %>%
+  left_join(inv_tbl, by = "name") %>%
+  mutate(pop = names(bed_lst[i]), chr = j)
+
+chr8_network <- ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(aes(alpha = weight)) +
+  geom_nodes(aes(color = inv)) +
+  scale_alpha_continuous(name = "LD") +
+  scale_color_discrete(type = c("red", "#404040"), name = "Region") +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        strip.text = element_text(size = 12, face = "bold"))
+
+# Extract the single-outlier clusters and summarize
+clusters <- extractBranches(ldna, min.edges=1)
+
+summary1 <- summaryLDna(ldna, clusters, ld)
+
+# Keep only clusters with more than 2 loci
+filt_clusters8 <- summary1 %>%
+  filter(nLoci > 3)
+
+filt_cluster_names8 <- filt_clusters8 %>%
+  pull(Name)
+
+clust_tbl8 <- clusters[filt_cluster_names8] %>%
+  map2(.y = names(.), function(x, y) {
+    tibble(cluster = y, locus = x)
+  }) %>%
+  bind_rows() %>%
+  tidyr::extract(locus, c("chrom_num", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom_num = as.integer(chrom_num), pos = as.integer(pos))
+  
+# Plot the position of the clusters
+chr_end <- chr_length$length[chr_length$chr == "8"]
+
+chr8_chr <- ggplot(clust_tbl8, aes(x = pos, y = 0.1)) +
+  geom_point(aes(color = cluster)) +
+  xlim(0, chr_end) +
+  ylim(0.05, 0.15) +
+  labs(x = "chromosomal position") +
+  geom_segment(x = 0, xend = chr_end, y = 0.095, yend = 0.095) +
+  geom_segment(x = 0, xend = 0, y = 0.095, yend = 0.1) +
+  geom_segment(x = chr_end, xend = chr_end, y = 0.1, yend = 0.095) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank()) 
+  
+
+```
+
+# Chromosome 12 analysis
+
+```{r}
+
+# Have a look at the block in ESP first
+bed_esp <- bed_all[1:19]
+chr_snps_esp <- select.snps(bed_esp, chr == 12)
+ld_esp <- LD(chr_snps_esp, c(1, nrow(chr_snps_esp@snps)))
+ld_esp[is.nan(ld_esp)] <- 0
+
+ld_esp[lower.tri(ld_esp)] <- NA
+
+LD.plot(ld_esp)
+#LD.plot(ld_esp, pdf.file = "test.pdf", above.space = 10)
+
+
+
+chr_snps <- select.snps(bed_all, chr == 12)
+ld <- LD(chr_snps, c(1, nrow(chr_snps@snps)))
+ld[is.nan(ld)] <- 0
+
+ld[lower.tri(ld)] <- NA
+
+LD.plot(ld)
+
+ldna <- LDnaRaw(ld)
+
+# Plot the entire network with low threshold for visualization
+ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
+
+nw <- ggnetwork(ig) %>%
+  left_join(inv_tbl, by = "name") %>%
+  mutate(pop = names(bed_lst[i]), chr = j)
+
+chr12_network <- ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(aes(alpha = weight)) +
+  geom_nodes(aes(color = inv)) +
+  scale_alpha_continuous(name = "LD") +
+  scale_color_discrete(type = c("red", "#404040"), name = "Region") +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        strip.text = element_text(size = 12, face = "bold"))
+
+# Extract the single-outlier clusters and summarize
+clusters <- extractBranches(ldna, min.edges=1)
+
+summary1 <- summaryLDna(ldna, clusters, ld)
+
+# Keep only clusters with more than 2 loci
+filt_clusters12 <- summary1 %>%
+  filter(nLoci > 3)
+
+filt_cluster_names12 <- filt_clusters12 %>%
+  pull(Name)
+
+clust_tbl12 <- clusters[filt_cluster_names12] %>%
+  map2(.y = names(.), function(x, y) {
+    tibble(cluster = y, locus = x)
+  }) %>%
+  bind_rows() %>%
+  tidyr::extract(locus, c("chrom_num", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom_num = as.integer(chrom_num), pos = as.integer(pos))
+  
+# Plot the position of the clusters
+chr_end <- chr_length$length[chr_length$chr == "12"]
+
+chr12_chr <- ggplot(clust_tbl12, aes(x = pos, y = 0.1)) +
+  geom_point(aes(color = cluster)) +
+  xlim(0, chr_end) +
+  ylim(0.05, 0.15) +
+  labs(x = "chromosomal position") +
+  geom_segment(x = 0, xend = chr_end, y = 0.095, yend = 0.095) +
+  geom_segment(x = 0, xend = 0, y = 0.095, yend = 0.1) +
+  geom_segment(x = chr_end, xend = chr_end, y = 0.1, yend = 0.095) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank()) 
+  
+
+```
+
+# Chromosome 1 analysis (no suspected inversion) for comparision
+
+```{r}
+
+chr_snps <- select.snps(bed_all, chr == 1)
+ld <- LD(chr_snps, c(1, nrow(chr_snps@snps)))
+ld[is.nan(ld)] <- 0
+
+ld[lower.tri(ld)] <- NA
+
+LD.plot(ld)
+
+ldna <- LDnaRaw(ld)
+
+# Plot the entire network with low threshold for visualization
+ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
+
+nw <- ggnetwork(ig) %>%
+  left_join(inv_tbl, by = "name") %>%
+  mutate(pop = names(bed_lst[i]), chr = j)
+
+ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(aes(alpha = weight)) +
+  geom_nodes(aes(color = inv)) +
+  scale_alpha_continuous(name = "LD") +
+  scale_color_discrete(type = c("#404040"), name = "Region") +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        strip.text = element_text(size = 12, face = "bold"))
+
+# Extract the single-outlier clusters and summarize
+clusters <- extractBranches(ldna, min.edges=1)
+
+summary1 <- summaryLDna(ldna, clusters, ld)
+
+# Keep only clusters with more than 2 loci
+filt_clusters <- summary1 %>%
+  filter(nLoci > 2)
+
+filt_cluster_names <- filt_clusters %>%
+  pull(Name)
+
+clust_tbl <- clusters[filt_cluster_names] %>%
+  map2(.y = names(.), function(x, y) {
+    tibble(cluster = y, locus = x)
+  }) %>%
+  bind_rows() %>%
+  tidyr::extract(locus, c("chrom_num", "pos"), "HiC_scaffold_(\\d+)_arrow_ctg1_(\\d+)", remove = FALSE) %>%
+  mutate(chrom_num = as.integer(chrom_num), pos = as.integer(pos))
+  
+# Plot the position of the clusters
+ggplot(clust_tbl, aes(x = pos, y = 0.1)) +
+  geom_point(aes(color = cluster)) +
+  xlim(0, max(clust_tbl$pos))
+  
+
+```
+
+# Combined Plot and Export
+
+```{r}
+
+(chr2_network + ggtitle("Chrom 2") + chr2_chr) / (chr8_network + ggtitle("Chrom 8") + chr8_chr) / (chr12_network + ggtitle("Chrom 12") + chr12_chr) +
+  plot_annotation(tag_levels = 'a')
+
+plot_obj <- list(chr2_network = chr2_network, chr2_chr = chr2_chr,
+                 chr8_network = chr8_network, chr8_chr = chr8_chr,
+                 chr12_network = chr12_network, chr12_chr = chr12_chr)
+
+write_rds(plot_obj, file = here::here("data", "derived", "ldna_plot.rds"))
+
+comb_clusters <- bind_rows(clust_tbl2, clust_tbl8, clust_tbl12) %>%
+  filter(pos != 10017512) %>% # Remove the outlier on the chrom 2 inversion to more accurately report the span
+  group_by(cluster) %>%
+  summarize(cluster, chrom_num, nloci = n(), min = min(pos), max = max(pos)) %>%
+  unique() %>%
+  ungroup()
+
+write_tsv(comb_clusters, here::here("data", "derived", "ldna_clusters.tsv"))
+
+
+
+
+```

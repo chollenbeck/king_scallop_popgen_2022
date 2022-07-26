@@ -83,17 +83,20 @@ sample_map <- ggplot() +
   geom_point(data = coords, aes(x = long, y = lat, colour = group), size = 4) +
   geom_text(data = coords, aes(label = site, x = long, y = lat), fontface = "bold",
             size = 3,
-            nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, -1.8, -2),
-            nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 0.3, 0)) + 
+            nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, 0, -2),
+            nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 1, 0)) + 
   theme_minimal() +
   theme(plot.title = element_text(size = 14),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
+        #axis.text.x = element_blank(),
+        #axis.text.y = element_blank(),
         plot.margin = margin(0.5, 0.1, 0, 0.5, "cm")) +
   scale_colour_manual(values = pca_col$col) +
   theme(legend.position = "none") +
   labs(x = "",
-       y = "")
+       y = "") +
+  geom_segment(aes(x = 2.5, xend = 3.3, y = 63, yend = 57.5), size = 2, color = "red", linetype = 3) +
+  geom_text(aes(x = 5.4, y = 67, label = "Norwegian", fontface = "bold")) +
+  geom_text(aes(x = -7.5, y = 64, label = "Atlantic", fontface = "bold"))
 
 map_no_lines <- ggplot() +
   geom_polygon(data = world, aes(x = X, y = Y, group = PID), alpha = 0.75, colour = "white", size = 0.05) +
