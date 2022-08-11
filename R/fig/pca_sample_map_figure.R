@@ -94,7 +94,7 @@ sample_map <- ggplot() +
   theme(legend.position = "none") +
   labs(x = "",
        y = "") +
-  geom_segment(aes(x = 2.5, xend = 3.3, y = 63, yend = 57.5), size = 2, color = "red", linetype = 3) +
+  geom_segment(aes(x = 2.5, xend = 3.3, y = 63.5, yend = 56.8), size = 0.5, color = "darkred", linetype = 2) +
   geom_text(aes(x = 5.4, y = 67, label = "Norwegian", fontface = "bold")) +
   geom_text(aes(x = -7.5, y = 64, label = "Atlantic", fontface = "bold"))
 
