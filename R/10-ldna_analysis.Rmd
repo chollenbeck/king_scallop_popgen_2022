@@ -122,8 +122,7 @@ ldna <- LDnaRaw(ld)
 ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
 
 nw <- ggnetwork(ig) %>%
-  left_join(inv_tbl, by = "name") %>%
-  mutate(pop = names(bed_lst[i]), chr = j)
+  left_join(inv_tbl, by = "name")
 
 chr2_network <- ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
   geom_edges(aes(alpha = weight)) +
@@ -190,8 +189,7 @@ ldna <- LDnaRaw(ld)
 ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
 
 nw <- ggnetwork(ig) %>%
-  left_join(inv_tbl, by = "name") %>%
-  mutate(pop = names(bed_lst[i]), chr = j)
+  left_join(inv_tbl, by = "name")
 
 chr8_network <- ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
   geom_edges(aes(alpha = weight)) +
@@ -255,8 +253,6 @@ ld_esp[lower.tri(ld_esp)] <- NA
 LD.plot(ld_esp)
 #LD.plot(ld_esp, pdf.file = "test.pdf", above.space = 10)
 
-
-
 chr_snps <- select.snps(bed_all, chr == 12)
 ld <- LD(chr_snps, c(1, nrow(chr_snps@snps)))
 ld[is.nan(ld)] <- 0
@@ -271,8 +267,7 @@ ldna <- LDnaRaw(ld)
 ig <- plotLDnetwork(ldna, ld, option = 1, threshold = 0.01, graph.object = TRUE, full.network = TRUE)
 
 nw <- ggnetwork(ig) %>%
-  left_join(inv_tbl, by = "name") %>%
-  mutate(pop = names(bed_lst[i]), chr = j)
+  left_join(inv_tbl, by = "name")
 
 chr12_network <- ggplot(nw, aes(x = x, y = y, xend = xend, yend = yend)) +
   geom_edges(aes(alpha = weight)) +
@@ -321,7 +316,7 @@ chr12_chr <- ggplot(clust_tbl12, aes(x = pos, y = 0.1)) +
 
 ```
 
-# Chromosome 1 analysis (no suspected inversion) for comparision
+# Chromosome 1 analysis (no suspected inversion) for comparison
 
 ```{r}
 

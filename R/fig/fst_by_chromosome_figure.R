@@ -89,3 +89,9 @@ ggsave(here::here("out", "fig", "fst_chromosome_plot.png"),
        width = 32,
        height = 5,
        units = "cm")
+
+ggsave(here::here("out", "fig", "fst_chromosome_plot.pdf"),
+       fst_plot,
+       width = 32,
+       height = 5,
+       units = "cm")

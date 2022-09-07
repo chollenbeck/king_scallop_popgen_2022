@@ -140,5 +140,5 @@ comb_plot <- (neut_pca / out_pca) - sample_map +
   plot_annotation(tag_levels = 'A')
 
 ggsave("out/fig/sample_map.png", comb_plot, width = 20, height = 15, units = "cm")
-
+ggsave("out/fig/sample_map.pdf", comb_plot, width = 20, height = 15, units = "cm")
 

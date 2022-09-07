@@ -2,7 +2,7 @@
 title: "Inversion Genotypes"
 author: "Chris Hollenbeck"
 date: "`r Sys.Date()`"
-output: notebook_entry
+output: tint::tintHtml
 bibliography: skeleton.bib
 link-citations: yes
 ---
@@ -506,7 +506,7 @@ chr12_pie_map <- ggplot() +
                            cols=c("A", "B", "C"), size = 0.5, pie_scale = 2) +
   geom_text(data = coords, aes(label = pop, x = long, y = lat), fontface = "bold",
             size = 3,
-            nudge_x = c(-1.5, -1.5, -2, 1.5, 1.5, -1.9, -1.8, -2),
+            nudge_x = c(-2, -2, -2, 1.5, 1.5, -1.9, -2, -2),
             nudge_y = c(0, 0, 0, -0.4, 0.4, 0.5, 0.3, 0)) + 
   theme_minimal() +
   theme(plot.title = element_text(size = 14),

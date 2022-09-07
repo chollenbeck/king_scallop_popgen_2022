@@ -11,7 +11,6 @@ source("bin/functions.R")
 # Read in the relevant data
 
 outlier_tbl <- read_rds(here::here("data", "derived", "outlier_summary.rds"))
-haplo_div_tbl <- read_rds(here::here("data", "derived", "haplotype_div.rds"))
 gen_div_tbl <- read_rds(here::here("data", "derived", "genetic_div.rds"))
 hapsel_tbl <- read_rds(here::here("data", "derived", "hap_selection_tbl.rds"))
 rsb_tbl <- read_rds(here::here("data", "derived", "rsb_tbl.rds"))
@@ -69,6 +68,7 @@ chr12_het <- het_smooth %>%
   ggplot(aes(x = pos, y = he_avg, color = pop)) +
   geom_line() +
   scale_colour_manual(values = pca_col$col) +
+  guides(colour=guide_legend(title="Locality")) +
   labs(y = "heterozygosity") +
   theme_minimal() +
   theme(legend.position = "none",
@@ -80,10 +80,12 @@ chr12_fst <- scot_esp_pw %>%
   ggplot(aes(x = pos, y = Fst, col = outlier)) +
   geom_point() +
   theme_minimal() +
+  guides(colour=guide_legend(title="Outlier")) +
   theme(axis.title.x = element_blank(),
         axis.text.x = element_blank()) +
   scale_color_manual(values = c(cmh_palette[1], cmh_palette[3])) +
   labs(y = expression(F[ST]))
+
 
 chr12_env <- scot_esp_pw %>%
   filter(chrom == 12) %>%
@@ -99,6 +101,7 @@ chr12_ies <- hapsel_tbl %>%
   ggplot(aes(x = position, y = ies, color = pop)) +
   geom_line() +
   scale_colour_manual(values = pca_col$col) +
+  guides(colour=guide_legend(title="Locality")) +
   theme_minimal() +
   theme(axis.title.x = element_blank(),
         axis.text.x = element_blank()) +
@@ -230,7 +233,8 @@ gg_12 <- ld_12 %>%
 
 plot1 <- (chr12_fst + chr12_het + chr12_ies + chr12_rsb + plot_layout(ncol = 1) + 
             plot_annotation(tag_levels = 'A'))  / 
-  (gg_12$NOR + gg_12$SCOT + gg_12$ESP + plot_layout(ncol = 3, guides = "collect"))
+  (gg_12$NOR + gg_12$SCOT + gg_12$ESP + plot_layout(ncol = 3, guides = "collect")) +
+  labs(colour="Pop")
 
 #plot2 <- (chr12_fst + theme(legend.position = "none") + chr12_het + chr12_ies + theme(legend.position = "none") + plot_layout(ncol = 1))
 
@@ -240,5 +244,8 @@ plot3 <- (gg_12$NOR + gg_12$SCOT + gg_12$ESP + plot_layout(ncol = 3, guides = "c
 
 
 ggsave(filename = "out/fig/chrom12_summary.png", plot = plot1, width = 15, height = 22,
+       units = "cm")
+
+ggsave(filename = "out/fig/chrom12_summary.pdf", plot = plot1, width = 15, height = 22,
        units = "cm")
 
